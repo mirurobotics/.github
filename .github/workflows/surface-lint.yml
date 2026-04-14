@@ -7,18 +7,14 @@ on:
         description: "Runner label"
         type: string
         default: "ubuntu-latest"
-      yamllint-file-or-dir:
-        description: "Path for yamllint to scan"
+      yamllint-ignore:
+        description: "Space-separated directories to exclude from YAML linting"
         type: string
-        default: "."
-      yamllint-config-file:
-        description: "Path to yamllint config"
+        default: ""
+      shellcheck-ignore:
+        description: "Space-separated paths to exclude from shell script linting"
         type: string
-        default: ".yamllint.yml"
-      shellcheck-scandir:
-        description: "Directory for shellcheck to scan"
-        type: string
-        default: "./scripts"
+        default: ""
 
 jobs:
   surface-lint:
@@ -29,17 +25,25 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # yamllint disable rule:line-length
       - name: Lint YAML
-        uses: ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c # v3.1.1
-        with:
-          file_or_dir: ${{ inputs.yamllint-file-or-dir }}
-          config_file: ${{ inputs.yamllint-config-file }}
+        shell: bash
+        run: |
+          pip install --quiet yamllint
+          exclude=(-not -path './.git/*')
+          for dir in $YAMLLINT_IGNORE; do
+            exclude+=(-not -path "./$dir" -not -path "./$dir/*")
+          done
+          find . -type f \( -name '*.yml' -o -name '*.yaml' \) "${exclude[@]}" -print0 | \
+            xargs -0 --no-run-if-empty yamllint -c .yamllint.yml
+        env:
+          YAMLLINT_IGNORE: ${{ inputs.yamllint-ignore }}
 
       - name: Lint Shell Scripts
+        # yamllint disable rule:line-length
         uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
-          scandir: ${{ inputs.shellcheck-scandir }}
+          scandir: ./scripts
+          ignore_paths: ${{ inputs.shellcheck-ignore }}
 
       - name: Lint GitHub Actions Workflows
         uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
