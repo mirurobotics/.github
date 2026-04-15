@@ -1,0 +1,39 @@
+name: Surface Lint
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner label"
+        type: string
+        default: "ubuntu-latest"
+      shellcheck-ignore:
+        description: "Space-separated paths to exclude from shell script linting"
+        type: string
+        default: ""
+
+jobs:
+  surface-lint:
+    timeout-minutes: 10
+    name: surface-lint
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # yamllint disable rule:line-length
+      - name: Lint YAML
+        uses: ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c # v3.1.1
+        with:
+          file_or_dir: .
+          config_file: .yamllint.yml
+
+      - name: Lint Shell Scripts
+        # yamllint disable rule:line-length
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: ./scripts
+          ignore_paths: ${{ inputs.shellcheck-ignore }}
+
+      - name: Lint GitHub Actions Workflows
+        uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12

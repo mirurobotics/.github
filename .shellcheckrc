@@ -1,0 +1,2 @@
+# Default shell dialect for scripts without a shebang.
+shell=sh

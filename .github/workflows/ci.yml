@@ -1,0 +1,11 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  surface-lint:
+    uses: ./.github/workflows/surface-lint.yml
