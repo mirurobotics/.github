@@ -7,10 +7,6 @@ on:
         description: "Runner label"
         type: string
         default: "ubuntu-latest"
-      yamllint-ignore:
-        description: "Space-separated directories to exclude from YAML linting"
-        type: string
-        default: ""
       shellcheck-ignore:
         description: "Space-separated paths to exclude from shell script linting"
         type: string
@@ -25,18 +21,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # yamllint disable rule:line-length
       - name: Lint YAML
-        shell: bash
-        run: |
-          pip install --quiet yamllint
-          exclude=(-not -path './.git/*')
-          for dir in $YAMLLINT_IGNORE; do
-            exclude+=(-not -path "./$dir" -not -path "./$dir/*")
-          done
-          find . -type f \( -name '*.yml' -o -name '*.yaml' \) "${exclude[@]}" -print0 | \
-            xargs -0 --no-run-if-empty yamllint -c .yamllint.yml
-        env:
-          YAMLLINT_IGNORE: ${{ inputs.yamllint-ignore }}
+        uses: ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c # v3.1.1
+        with:
+          file_or_dir: .
+          config_file: .yamllint.yml
 
       - name: Lint Shell Scripts
         # yamllint disable rule:line-length
