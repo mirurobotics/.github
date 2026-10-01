@@ -46,6 +46,10 @@ on:
         description: Claude model used for the review
         type: string
         default: claude-opus-5-5
+      effort:
+        description: Claude effort level (low, medium, high, xhigh, max)
+        type: string
+        default: high
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic API key. Set this or CLAUDE_CODE_OAUTH_TOKEN.
@@ -129,6 +133,7 @@ jobs:
             approve. List only blocking findings in blocking_findings.
           claude_args: |
             --model ${{ inputs.model }}
+            --effort ${{ inputs.effort }}
             --max-turns 60
             --add-dir pr-head
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"
