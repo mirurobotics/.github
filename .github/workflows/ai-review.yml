@@ -99,7 +99,8 @@ jobs:
       # Earlier review threads and the PR conversation, so the review can
       # skip points that were already raised and answered. Fetched here
       # rather than giving Claude `gh api`, whose token can post statuses.
-      # Runs after the checkouts, which clean the workspace.
+      # Runs after the checkouts, which clean the workspace. A failed fetch
+      # fails the step (and the review, closed); re-run the job.
       - name: Collect prior review comments
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,7 +126,7 @@ jobs:
                   }
                 }
               }' \
-            | jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]
+            | jq -cs '[.[].data.repository.pullRequest.reviewThreads.nodes[]
               | {key: (.comments.nodes[0].databaseId | tostring), value: .isResolved}]
               | from_entries')
           # Markdown keeps long bodies on real lines; each body is quoted
