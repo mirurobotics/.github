@@ -35,5 +35,60 @@ jobs:
           scandir: ./scripts
           ignore_paths: ${{ inputs.shellcheck-ignore }}
 
+      # Run rhysd's prebuilt actionlint image instead of the rhysd/actionlint
+      # action, which builds its Dockerfile from source on every run (about
+      # 20s). The image is cached so most runs skip the Docker Hub pull. To
+      # bump: change the tag below and copy the linux/amd64 and linux/arm64
+      # manifest digests from that tag's image index.
+      - name: Select actionlint image
+        id: actionlint
+        env:
+          ACTIONLINT_TAG: 1.7.12
+          ACTIONLINT_DIGEST_AMD64: sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+          ACTIONLINT_DIGEST_ARM64: sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723
+        run: |
+          case "$RUNNER_ARCH" in
+            X64) digest="$ACTIONLINT_DIGEST_AMD64" ;;
+            ARM64) digest="$ACTIONLINT_DIGEST_ARM64" ;;
+            *) echo "::error::No pinned actionlint image for runner arch $RUNNER_ARCH"; exit 1 ;;
+          esac
+          echo "image=rhysd/actionlint@$digest" >> "$GITHUB_OUTPUT"
+          echo "cache-key=actionlint-$ACTIONLINT_TAG-$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore actionlint image
+        id: actionlint-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint-image.tar
+          key: ${{ steps.actionlint.outputs.cache-key }}
+
+      # Pull by the per-arch manifest digest, not the tag's index: the index
+      # also lists attestation manifests that `docker save` can't export.
+      - name: Load actionlint image
+        env:
+          IMAGE: ${{ steps.actionlint.outputs.image }}
+          CACHE_HIT: ${{ steps.actionlint-cache.outputs.cache-hit }}
+          IMAGE_TAR: ${{ runner.temp }}/actionlint-image.tar
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" = true ]; then
+            docker load -i "$IMAGE_TAR"
+          else
+            docker pull -q "$IMAGE"
+            docker tag "$IMAGE" actionlint:pinned
+            docker save -o "$IMAGE_TAR" actionlint:pinned
+          fi
+
+      # Saved before linting so a lint failure doesn't leave the cache empty.
+      - name: Save actionlint image
+        if: steps.actionlint-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint-image.tar
+          key: ${{ steps.actionlint.outputs.cache-key }}
+
       - name: Lint GitHub Actions Workflows
-        uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+        run: |
+          set -euo pipefail
+          docker run --rm actionlint:pinned -version
+          docker run --rm -v "$PWD:/repo" -w /repo actionlint:pinned
