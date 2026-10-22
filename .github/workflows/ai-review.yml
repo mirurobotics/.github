@@ -164,9 +164,11 @@ jobs:
       # summary comment's hidden marker names the last approved commit and
       # the base branch it was approved against; it counts only if this
       # workflow's token set a success status on that commit, which a
-      # comment edit alone cannot fake, and the base branch is unchanged.
-      # Two compares against the current base give the PR's per-file diff
-      # then and now, and two tree reads give each file's mode. A file
+      # comment edit alone cannot fake, and the base branch and the
+      # approved commit's merge base with it are unchanged, so a base
+      # reset can't slip old base commits into the diff. Two compares
+      # against the current base give the PR's per-file diff then and
+      # now, and two tree reads give each file's mode. A file
       # whose diff, mode and rename source are unchanged needs no new
       # review. Hunk line numbers are ignored only for files the base
       # branch changed in between, where a rebase shifts them. Any doubt
@@ -187,15 +189,22 @@ jobs:
           # the real one and could echo a marker of its own.
           jq -s '[add // [] | .[]
             | select(.user.login == "github-actions[bot]")
-            | ([.body // "" | capture("<!-- ai-review-summary approved=(?<approved>[0-9a-f]{40}|none) base=(?<base>[^ ]+) rounds=(?<rounds>[0-9]+) -->"; "g")] | last) as $m
+            | ([.body // "" | capture("<!-- ai-review-summary approved=(?<approved>[0-9a-f]{40}|none) mb=(?<mb>[0-9a-f]{40}|none) base=(?<base>[^ ]+) rounds=(?<rounds>[0-9]+) -->"; "g")] | last) as $m
             | select($m != null)
-            | {id, approved: $m.approved, base: $m.base, rounds: $m.rounds}]
-            | last // {id: "", approved: "none", base: "", rounds: "0"}' \
+            | {id, approved: $m.approved, mb: $m.mb, base: $m.base, rounds: $m.rounds}]
+            | last // {id: "", approved: "none", mb: "none", base: "", rounds: "0"}' \
             "$RUNNER_TEMP/issue-comments.json" >"$tmp/summary.json"
           comment_id=$(jq -r '.id' "$tmp/summary.json")
           rounds=$(jq -r '.rounds' "$tmp/summary.json")
           approved=$(jq -r '.approved' "$tmp/summary.json")
+          approved_mb=$(jq -r '.mb' "$tmp/summary.json")
           [ "$(jq -r '.base' "$tmp/summary.json")" = "$BASE_REF" ] || approved=none
+
+          # Recorded with this round's approval, so the next round can check
+          # the approved diff's baseline.
+          head_mb=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA?per_page=1" \
+            --jq '.merge_base_commit.sha' 2>/dev/null || true)
+          [[ $head_mb =~ ^[0-9a-f]{40}$ ]] || head_mb=none
 
           if [ "$approved" != none ]; then
             last_state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$approved/statuses?per_page=100" 2>/dev/null \
@@ -232,6 +241,7 @@ jobs:
           }
           if [ "$approved" != none ] \
             && compare_at "$BASE_SHA" "$approved" old && compare_at "$BASE_SHA" "$HEAD_SHA" new \
+            && [ "$(jq -r '.merge_base' "$tmp/old.json")" = "$approved_mb" ] \
             && modes_at "$approved" old && modes_at "$HEAD_SHA" new && base_moved; then
             jq -rn --slurpfile old "$tmp/old.json" --slurpfile new "$tmp/new.json" \
               --slurpfile old_modes "$tmp/old-modes.json" --slurpfile new_modes "$tmp/new-modes.json" \
@@ -239,7 +249,7 @@ jobs:
               def key($modes; $moved): . as $f | {status, previous_filename, mode: $modes[.filename],
                 change: ((.patch // .sha // "")
                   | if $moved[$f.filename] or $moved[$f.previous_filename // ""]
-                    then gsub("@@ -[0-9,]+ \\+[0-9,]+ @@"; "@@") else . end)};
+                    then gsub("(?<nl>^|\n)@@ -[0-9,]+ \\+[0-9,]+ @@"; "\(.nl)@@") else . end)};
               ($base[0].files | map(.filename, (.previous_filename // empty))
                 | map({key: ., value: true}) | from_entries) as $moved
               | ($old[0].files | map({key: .filename, value: key($old_modes[0]; $moved)}) | from_entries) as $o
@@ -257,6 +267,7 @@ jobs:
             echo "approved_sha=$approved"
             echo "comment_id=$comment_id"
             echo "rounds=$rounds"
+            echo "head_mb=$head_mb"
           } >>"$GITHUB_OUTPUT"
           echo "Review scope: $mode (last approved: $approved)"
 
@@ -399,6 +410,7 @@ jobs:
           APPROVED_SHA: ${{ steps.scope.outputs.approved_sha }}
           COMMENT_ID: ${{ steps.scope.outputs.comment_id }}
           ROUNDS: ${{ steps.scope.outputs.rounds }}
+          HEAD_MB: ${{ steps.scope.outputs.head_mb }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -430,10 +442,12 @@ jobs:
           verdict=$(jq -r '.verdict // empty' <<<"${RESULT:-}" 2>/dev/null || true)
           case "$verdict" in
           approve)
-            state=success description="Approved by Claude" approved=$SHA
+            state=success description="Approved by Claude" approved=$SHA mb=${HEAD_MB:-none}
             ;;
           request_changes)
-            state=failure description="Claude found blocking issues" approved=${APPROVED_SHA:-none}
+            # A blocker may sit in code an earlier round approved, so the
+            # next round reviews the whole PR.
+            state=failure description="Claude found blocking issues" approved=none mb=none
             ;;
           *)
             set_status error "Review did not complete; re-run the job"
@@ -447,8 +461,8 @@ jobs:
             | "- `\(.file)\(if .line then ":\(.line)" else "" end)`: \(.description)"' \
             <<<"$RESULT")
           # One summary comment per PR, edited each round. The marker
-          # records the approved commit and its base branch for the next
-          # round's scope, and the count of rounds Claude ran.
+          # records the approved commit, its merge base and base branch for
+          # the next round's scope, and the count of rounds Claude ran.
           body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`$scope
 
           $summary
@@ -458,7 +472,7 @@ jobs:
           $findings
           }
           [Review run]($run_url) · round $rounds
-          <!-- ai-review-summary approved=$approved base=$BASE_REF rounds=$rounds -->"
+          <!-- ai-review-summary approved=$approved mb=$mb base=$BASE_REF rounds=$rounds -->"
 
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
           if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
