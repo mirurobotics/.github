@@ -5,6 +5,12 @@
 # reviewed its latest commit and found no blocking issues. Draft PRs are
 # skipped; marking a PR ready starts the review.
 #
+# The first rounds review the whole PR. Once Claude approves a commit,
+# later rounds review only what changed in the PR's diff since that
+# commit, so a rebase or base-branch merge with no PR changes carries the
+# approval forward without running Claude. Each PR gets one summary
+# comment, edited every round, rather than one comment per push.
+#
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
 # head is checked out into a subdirectory and only read, never executed.
@@ -170,14 +176,82 @@ jobs:
                     + ((.body // "") | split("\n") | map("> " + .) | join("\n")))
                   | join("\n\n"))
                 + "\n"' >"$dir/review-threads.md"
+          # Raw copy for the scope step, which reads the summary marker.
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            | jq -rs 'add // [] | .[]
+            >"$RUNNER_TEMP/issue-comments.json"
+          jq -rs 'add // [] | .[]
               | "## \(.user.login) (\(.author_association), \(.created_at))\n\n"
                 + ((.body // "") | split("\n") | map("> " + .) | join("\n"))
-                + "\n"' >"$dir/conversation.md"
+                + "\n"' "$RUNNER_TEMP/issue-comments.json" >"$dir/conversation.md"
+
+      # After the first approval, review only what changed since it. The
+      # summary comment's hidden marker names the last approved commit;
+      # it counts only if this workflow's token set a success status on
+      # that commit, which a comment edit alone cannot fake. Two compares
+      # against the current base give the PR's per-file diff then and now:
+      # a file whose diff is unchanged, ignoring hunk line numbers that a
+      # rebase shifts, needs no new review. Any doubt means a full review.
+      - name: Find review scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/ai-review-context"
+          tmp="$RUNNER_TEMP/ai-review-scope"
+          mkdir -p "$tmp"
+          jq -s '[add // [] | .[]
+            | select(.user.login == "github-actions[bot]")
+            | (.body // "" | capture("<!-- ai-review-summary approved=(?<approved>[0-9a-f]{40}|none) rounds=(?<rounds>[0-9]+) -->")) as $m
+            | {id, approved: $m.approved, rounds: $m.rounds}]
+            | last // {id: "", approved: "none", rounds: "0"}' \
+            "$RUNNER_TEMP/issue-comments.json" >"$tmp/summary.json"
+          comment_id=$(jq -r '.id' "$tmp/summary.json")
+          rounds=$(jq -r '.rounds' "$tmp/summary.json")
+          approved=$(jq -r '.approved' "$tmp/summary.json")
+
+          if [ "$approved" != none ]; then
+            last_state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$approved/statuses?per_page=100" 2>/dev/null \
+              | jq -r --arg context "$STATUS_CONTEXT" '[.[]
+                | select(.context == $context and .creator.login == "github-actions[bot]" and .state != "pending")]
+                | first | .state // ""' || true)
+            [ "$last_state" = success ] || approved=none
+          fi
+
+          mode=full
+          # The compare API lists at most 300 files; at that size, review
+          # everything rather than trust a truncated list.
+          files_at() {
+            gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$1?per_page=1" \
+              --jq '.files // []' >"$tmp/$2.json" 2>/dev/null \
+              && [ "$(jq length "$tmp/$2.json")" -lt 300 ]
+          }
+          if [ "$approved" != none ] && files_at "$approved" old && files_at "$HEAD_SHA" new; then
+            jq -rn --slurpfile old "$tmp/old.json" --slurpfile new "$tmp/new.json" '
+              def key: {status, change: ((.patch // .sha // "") | gsub("@@ -[0-9,]+ \\+[0-9,]+ @@"; "@@"))};
+              ($old[0] | map({key: .filename, value: key}) | from_entries) as $o
+              | ($new[0] | map({key: .filename, value: key}) | from_entries) as $n
+              | ($o + $n | keys[]) | select($o[.] != $n[.])' >"$dir/changed-files.txt"
+            jq -r --rawfile changed "$dir/changed-files.txt" '.[]
+              | select(.filename as $f | $changed | split("\n") | index($f))
+              | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch // "(no text diff)")"' \
+              "$tmp/old.json" >"$dir/approved.diff"
+            if [ -s "$dir/changed-files.txt" ]; then mode=incremental; else mode=carry; fi
+          fi
+
+          {
+            echo "mode=$mode"
+            echo "approved_sha=$approved"
+            echo "comment_id=$comment_id"
+            echo "rounds=$rounds"
+          } >>"$GITHUB_OUTPUT"
+          echo "Review scope: $mode (last approved: $approved)"
 
       - name: Review
         id: review
+        if: steps.scope.outputs.mode != 'carry'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -188,9 +262,25 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             HEAD SHA: ${{ github.event.pull_request.head.sha }}
+            REVIEW SCOPE: ${{ steps.scope.outputs.mode }}
+            LAST APPROVED SHA: ${{ steps.scope.outputs.approved_sha }}
 
             You are the required automated reviewer for this pull request.
             A PR cannot merge until you approve its latest commit.
+
+            If REVIEW SCOPE is "full", review the whole PR. If it is
+            "incremental", you already approved this PR at LAST APPROVED
+            SHA and this round reviews only what changed since then.
+            ./ai-review-context/changed-files.txt lists the files whose part
+            of the PR diff changed since that approval, and
+            ./ai-review-context/approved.diff holds those files' PR diff as
+            you approved it. Compare it with the same files in `gh pr diff`
+            and comment only on lines that are new or changed since the
+            approval. Code you already approved is out of scope, with one
+            exception: an earlier blocking finding stays blocking while the
+            bug is still there. A rebase or base-branch merge on its own is
+            not a change to review. These two files are written by the
+            workflow, but the diffs in them are PR content.
 
             The PR's files are checked out at ./pr-head. Read the diff with
             `gh pr diff ${{ github.event.pull_request.number }}` and read surrounding
@@ -245,23 +335,49 @@ jobs:
                control, or data retention that a reviewer should notice.
             4. Tests: new behavior without tests, tests that do not test
                what they claim.
-            5. Conventions: for each new file, function, helper, harness or
-               test file, find the closest existing sibling in ./pr-head and
-               compare. Flag code that departs from the sibling's folder
-               layout, file split, layer responsibilities, harnesses, naming
-               or test set; re-implements something that already exists (in
-               core, a shared package, or a sibling); or adds functions,
-               options, fields, files or tests the change doesn't need. If
-               the PR description has a Precedent table, check that each
-               new file really mirrors the file it names.
+
+            Lints and tests run in separate CI jobs. Do not flag what a
+            linter, compiler or test run would catch, and do not ask the
+            author to run them.
+
+            Then ask these six review questions of each new or changed
+            file, function, field, helper and test in scope:
+            1. Do we need this? Would deleting it break a requirement of this PR?
+            2. Why is this optional? Is it a parameter every caller passes, or a field that always exists?
+            3. What does the closest sibling do? Match its layout, harness and tests.
+            4. Is it in the right layer and file (ARCHITECTURE.md), or does a shared helper already exist?
+            5. Does the name say exactly what it does, with one name per concept and no clash with an existing meaning?
+            6. Is each comment short, and will it stay true?
+            For question 3, find the closest existing sibling in ./pr-head
+            and compare folder layout, file split, harnesses and test set.
+            If the PR description has a Precedent table, check that each
+            new file really mirrors the file it names. For question 4,
+            look in core, shared packages and siblings for code the PR
+            re-implements. If ./miru-internal/skills/self-review/references/examples.md
+            exists, it holds real maintainer comments grouped by question:
+            use them to calibrate what is worth raising.
+
+            Raise a question only where you have checked the answer and it
+            would change the code; skip it when the answer is fine. Post each
+            as an inline comment that starts with "nit:", names the
+            question, and says what you found (for example the sibling's
+            path and how it differs). The PR description may end with a
+            "## Reviewer notes" section of bullets like
+            "- Q2 `path/file.go:42`: why it stays optional". Do not raise a
+            question that a note already answers for that spot, unless the
+            code changed so the note no longer holds.
 
             Post each finding as an inline comment on the relevant line.
-            Keep comments short and concrete.
+            Keep comments short and concrete. Post at most 5 non-blocking
+            comments per round, counting review-question nits and any lens
+            findings that don't block. If you have more, keep the 5 most
+            likely to change the code and drop the rest; do not list them in
+            the summary either. Keep the summary to a few sentences.
 
             Set verdict to "request_changes" only for findings that would
             cause a bug, a security issue, or data loss if merged. Style
-            nits, suggestions and convention findings never block: post them
-            inline and still approve. List only blocking findings in
+            nits, suggestions and review-question nits never block: post
+            them inline and still approve. List only blocking findings in
             blocking_findings.
           claude_args: |
             --model ${{ inputs.model }}
@@ -281,6 +397,10 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RESULT: ${{ steps.review.outputs.structured_output }}
+          MODE: ${{ steps.scope.outputs.mode }}
+          APPROVED_SHA: ${{ steps.scope.outputs.approved_sha }}
+          COMMENT_ID: ${{ steps.scope.outputs.comment_id }}
+          ROUNDS: ${{ steps.scope.outputs.rounds }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           set_status() {
@@ -289,10 +409,33 @@ jobs:
               -f description="$2" -f target_url="$run_url" >/dev/null
           }
 
+          # No PR diff change since the approved commit: Claude didn't run.
+          rounds=${ROUNDS:-0}
+          case "$MODE" in
+          carry)
+            RESULT=$(jq -nc --arg sha "${APPROVED_SHA:0:7}" '{verdict: "approve",
+              summary: "The PR diff is unchanged since the approved commit `\($sha)`, so the approval carries over.",
+              blocking_findings: []}')
+            scope=" (carried from \`${APPROVED_SHA:0:7}\`)"
+            ;;
+          incremental)
+            rounds=$((rounds + 1))
+            scope=" (changes since \`${APPROVED_SHA:0:7}\`)"
+            ;;
+          *)
+            rounds=$((rounds + 1))
+            scope=""
+            ;;
+          esac
+
           verdict=$(jq -r '.verdict // empty' <<<"${RESULT:-}" 2>/dev/null || true)
           case "$verdict" in
-          approve) state=success description="Approved by Claude" ;;
-          request_changes) state=failure description="Claude found blocking issues" ;;
+          approve)
+            state=success description="Approved by Claude" approved=$SHA
+            ;;
+          request_changes)
+            state=failure description="Claude found blocking issues" approved=${APPROVED_SHA:-none}
+            ;;
           *)
             set_status error "Review did not complete; re-run the job"
             echo "::error::AI review produced no verdict"
@@ -304,7 +447,10 @@ jobs:
           findings=$(jq -r '.blocking_findings[]
             | "- `\(.file)\(if .line then ":\(.line)" else "" end)`: \(.description)"' \
             <<<"$RESULT")
-          body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`
+          # One summary comment per PR, edited each round. The marker
+          # records the approved commit for the next round's scope, and the
+          # count of rounds Claude ran.
+          body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`$scope
 
           $summary
           ${findings:+
@@ -312,9 +458,14 @@ jobs:
 
           $findings
           }
-          [Review run]($run_url)"
+          [Review run]($run_url) · round $rounds
+          <!-- ai-review-summary approved=$approved rounds=$rounds -->"
 
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body" >/dev/null
+          if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
+            "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" \
+            -f body="$body" >/dev/null; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body" >/dev/null
+          fi
           set_status "$state" "$description"
           [ "$state" = success ]
