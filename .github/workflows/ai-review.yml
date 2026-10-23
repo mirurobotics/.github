@@ -672,11 +672,20 @@ jobs:
             line. Start it with "Blocking:" or "nit:", then "Missed
             earlier:" if REVIEW SCOPE is "incremental" and the code hasn't
             changed since LAST APPROVED SHA. A review-question nit names its
-            question. Keep comments short and concrete, and say what you
-            checked. Post at most 5 nits per round. If you have more, keep
+            question. Post at most 5 nits per round. If you have more, keep
             the 5 most likely to change the code and drop the rest; do not
-            list them in the summary either. Keep the summary to a few
-            sentences.
+            list them in the summary either.
+
+            Write for a busy reader who stops after the first sentence:
+            - An inline comment is at most 3 short sentences: the problem,
+              what goes wrong, and the fix. Lead with the problem. Cite
+              one concrete path, line or value; skip background the
+              author already knows.
+            - The summary is at most 3 sentences: the verdict's reason
+              and anything that needs a decision. Don't recap the PR,
+              list what you checked, restate inline comments or blocking
+              findings, or say which earlier points are now fixed.
+            - Each blocking_findings description is one sentence.
 
             Set verdict to "request_changes" for any finding that would make
             the merged code, test, workflow or skill do the wrong thing: a
