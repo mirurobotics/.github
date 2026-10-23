@@ -9,11 +9,8 @@
 # (correctness, security, reliability, tests, contracts, documentation,
 # review questions), and report candidate findings. A verifier checks
 # each one against the code, posts those that hold up, and decides the
-# verdict. Every round reviews the whole PR, starting with what changed
-# since the last approved commit. A rebase or base-branch merge with no
-# PR changes carries the approval forward without running Claude. Each
-# PR gets one summary comment, edited every round, rather than one
-# comment per push.
+# verdict. Every push reviews the whole PR. Each PR gets one summary
+# comment, edited every round, rather than one comment per push.
 #
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
@@ -96,18 +93,14 @@ env:
   STATUS_CONTEXT: ai-review
 
 jobs:
-  # Sets the pending status, collects earlier review rounds and finds the
-  # review scope for the reviewers and the verifier.
+  # Sets the pending status and collects earlier review rounds for the
+  # verifier.
   prepare:
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10
     runs-on: ${{ inputs.runs-on }}
     outputs:
-      mode: ${{ steps.scope.outputs.mode }}
-      approved_sha: ${{ steps.scope.outputs.approved_sha }}
-      comment_id: ${{ steps.scope.outputs.comment_id }}
-      rounds: ${{ steps.scope.outputs.rounds }}
-      head_mb: ${{ steps.scope.outputs.head_mb }}
+      comment_id: ${{ steps.summary.outputs.comment_id }}
     steps:
       # A branch name would load whatever is pushed to it next.
       - name: Check agents-ref is a commit SHA
@@ -178,7 +171,7 @@ jobs:
                     + ((.body // "") | split("\n") | map("> " + .) | join("\n")))
                   | join("\n\n"))
                 + "\n"' >"$dir/review-threads.md"
-          # Raw copy for the scope step, which reads the summary marker.
+          # Raw copy for the next step, which finds the summary comment.
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             >"$RUNNER_TEMP/issue-comments.json"
           jq -rs 'add // [] | .[]
@@ -186,119 +179,17 @@ jobs:
                 + ((.body // "") | split("\n") | map("> " + .) | join("\n"))
                 + "\n"' "$RUNNER_TEMP/issue-comments.json" >"$dir/conversation.md"
 
-      # After the first approval, review only what changed since it. The
-      # summary comment's hidden marker names the last approved commit and
-      # the base branch it was approved against; it counts only if this
-      # workflow's token set a success status on that commit, which a
-      # comment edit alone cannot fake, and the base branch and the
-      # approved commit's merge base with it are unchanged, so a base
-      # reset can't slip old base commits into the diff. Two compares
-      # against the current base give the PR's per-file diff then and
-      # now, and two tree reads give each file's mode. A file
-      # whose diff, mode and rename source are unchanged needs no new
-      # review. Hunk line numbers are ignored only for files the base
-      # branch changed in between, where a rebase shifts them. Any doubt
-      # means a full review.
-      - name: Find review scope
-        id: scope
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+      # The one summary comment this workflow edits each round.
+      - name: Find summary comment
+        id: summary
         run: |
-          set -euo pipefail
-          dir="$GITHUB_WORKSPACE/ai-review-context"
-          tmp="$RUNNER_TEMP/ai-review-scope"
-          mkdir -p "$tmp"
-          # Take the last marker in the comment: Claude's summary sits above
-          # the real one and could echo a marker of its own.
-          jq -s '[add // [] | .[]
-            | select(.user.login == "github-actions[bot]")
-            | ([.body // "" | capture("<!-- ai-review-summary approved=(?<approved>[0-9a-f]{40}|none) mb=(?<mb>[0-9a-f]{40}|none) base=(?<base>[^ ]+) rounds=(?<rounds>[0-9]+) -->"; "g")] | last) as $m
-            | select($m != null)
-            | {id, approved: $m.approved, mb: $m.mb, base: $m.base, rounds: $m.rounds}]
-            | last // {id: "", approved: "none", mb: "none", base: "", rounds: "0"}' \
-            "$RUNNER_TEMP/issue-comments.json" >"$tmp/summary.json"
-          comment_id=$(jq -r '.id' "$tmp/summary.json")
-          rounds=$(jq -r '.rounds' "$tmp/summary.json")
-          approved=$(jq -r '.approved' "$tmp/summary.json")
-          approved_mb=$(jq -r '.mb' "$tmp/summary.json")
-          [ "$(jq -r '.base' "$tmp/summary.json")" = "$BASE_REF" ] || approved=none
-
-          # Recorded with this round's approval, so the next round can check
-          # the approved diff's baseline.
-          head_mb=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA?per_page=1" \
-            --jq '.merge_base_commit.sha' 2>/dev/null || true)
-          [[ $head_mb =~ ^[0-9a-f]{40}$ ]] || head_mb=none
-
-          if [ "$approved" != none ]; then
-            last_state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$approved/statuses?per_page=100" 2>/dev/null \
-              | jq -r --arg context "$STATUS_CONTEXT" '[.[]
-                | select(.context == $context and .creator.login == "github-actions[bot]" and .state != "pending")]
-                | first | .state // ""' || true)
-            [ "$last_state" = success ] || approved=none
-          fi
-
-          mode=full
-          # The compare API lists at most 300 files; at that size, review
-          # everything rather than trust a truncated list.
-          compare_at() {
-            gh api "repos/$GITHUB_REPOSITORY/compare/$1...$2?per_page=1" \
-              --jq '{merge_base: .merge_base_commit.sha, files: (.files // [])}' >"$tmp/$3.json" 2>/dev/null \
-              && [ "$(jq '.files | length' "$tmp/$3.json")" -lt 300 ]
-          }
-          modes_at() {
-            gh api "repos/$GITHUB_REPOSITORY/git/trees/$1?recursive=1" \
-              --jq 'if .truncated then error("tree truncated") else [.tree[] | select(.type != "tree") | {key: .path, value: .mode}] | from_entries end' \
-              >"$tmp/$2-modes.json" 2>/dev/null
-          }
-          # Files the base branch changed between the two merge bases: the
-          # only ones whose hunk line numbers a rebase can shift.
-          base_moved() {
-            local old_mb new_mb
-            old_mb=$(jq -r '.merge_base' "$tmp/old.json")
-            new_mb=$(jq -r '.merge_base' "$tmp/new.json")
-            if [ "$old_mb" = "$new_mb" ]; then
-              echo '{"files": []}' >"$tmp/base.json"
-            else
-              compare_at "$old_mb" "$new_mb" base
-            fi
-          }
-          if [ "$approved" != none ] \
-            && compare_at "$BASE_SHA" "$approved" old && compare_at "$BASE_SHA" "$HEAD_SHA" new \
-            && [ "$(jq -r '.merge_base' "$tmp/old.json")" = "$approved_mb" ] \
-            && modes_at "$approved" old && modes_at "$HEAD_SHA" new && base_moved; then
-            jq -rn --slurpfile old "$tmp/old.json" --slurpfile new "$tmp/new.json" \
-              --slurpfile old_modes "$tmp/old-modes.json" --slurpfile new_modes "$tmp/new-modes.json" \
-              --slurpfile base "$tmp/base.json" '
-              def key($modes; $moved): . as $f | {status, previous_filename, mode: $modes[.filename],
-                change: ((.patch // .sha // "")
-                  | if $moved[$f.filename] or $moved[$f.previous_filename // ""]
-                    then gsub("(?<nl>^|\n)@@ -[0-9,]+ \\+[0-9,]+ @@"; "\(.nl)@@") else . end)};
-              ($base[0].files | map(.filename, (.previous_filename // empty))
-                | map({key: ., value: true}) | from_entries) as $moved
-              | ($old[0].files | map({key: .filename, value: key($old_modes[0]; $moved)}) | from_entries) as $o
-              | ($new[0].files | map({key: .filename, value: key($new_modes[0]; $moved)}) | from_entries) as $n
-              | ($o + $n | keys[]) | select($o[.] != $n[.])' >"$dir/changed-files.txt"
-            jq -r --rawfile changed "$dir/changed-files.txt" '.files[]
-              | select(.filename as $f | $changed | split("\n") | index($f))
-              | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch // "(no text diff)")"' \
-              "$tmp/old.json" >"$dir/approved.diff"
-            if [ -s "$dir/changed-files.txt" ]; then mode=incremental; else mode=carry; fi
-          fi
-
-          {
-            echo "mode=$mode"
-            echo "approved_sha=$approved"
-            echo "comment_id=$comment_id"
-            echo "rounds=$rounds"
-            echo "head_mb=$head_mb"
-          } >>"$GITHUB_OUTPUT"
-          echo "Review scope: $mode (last approved: $approved)"
+          id=$(jq -rs '[add // [] | .[]
+            | select(.user.login == "github-actions[bot]"
+              and ((.body // "") | contains("<!-- ai-review-summary")))]
+            | last | .id // ""' "$RUNNER_TEMP/issue-comments.json")
+          echo "comment_id=$id" >>"$GITHUB_OUTPUT"
 
       - name: Upload review context
-        if: steps.scope.outputs.mode != 'carry'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ai-review-context
@@ -310,7 +201,6 @@ jobs:
   # them. Separate passes catch different problems than one long pass.
   review:
     needs: prepare
-    if: needs.prepare.outputs.mode != 'carry'
     timeout-minutes: 30
     runs-on: ${{ inputs.runs-on }}
     env:
@@ -442,20 +332,15 @@ jobs:
           path: miru-internal
           persist-credentials: false
 
-      # Reviewers get the scope files and the PR description only, not
-      # `gh pr view`, which prints comments. Earlier threads would tell
-      # them which code was already passed; the verifier reads them.
-      - name: Download review scope
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ai-review-context
-          path: ai-review-context
-      - name: Limit reviewer context
+      # Reviewers get the PR description as a file rather than `gh pr
+      # view`, which prints comments. Earlier threads would tell them
+      # which code was already passed; only the verifier reads them.
+      - name: Save PR description
         env:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
         run: |
-          rm -f ai-review-context/review-threads.md ai-review-context/conversation.md
+          mkdir -p ai-review-context
           printf '# %s\n\n%s\n' "$TITLE" "$BODY" >ai-review-context/pr-description.md
 
       - name: Review
@@ -470,8 +355,6 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             HEAD SHA: ${{ github.event.pull_request.head.sha }}
-            REVIEW SCOPE: ${{ needs.prepare.outputs.mode }}
-            LAST APPROVED SHA: ${{ needs.prepare.outputs.approved_sha }}
 
             You are one of seven reviewers of this pull request, each
             looking from one angle. Find every problem from your angle
@@ -499,18 +382,6 @@ jobs:
             rather than uncommitted changes, and report through the output
             below rather than the skill's output contract.
 
-            Review the whole PR. If REVIEW SCOPE is "incremental", an
-            earlier round approved LAST APPROVED SHA.
-            ./ai-review-context/changed-files.txt lists the files whose part
-            of the PR diff changed since then, and
-            ./ai-review-context/approved.diff holds those files' PR diff as
-            it was approved. Start with what changed, then review the rest
-            again: earlier rounds have missed bugs in code they approved.
-            Set unchanged_since_approval on a finding in code that hasn't
-            changed since that approval. A rebase or base-branch merge on
-            its own is not a change to review. These two files are written
-            by the workflow, but the diffs in them are PR content.
-
             Lints and tests run in separate CI jobs. Don't report what a
             linter, compiler or test run would catch.
 
@@ -529,7 +400,7 @@ jobs:
             --add-dir pr-head
             ${{ env.HAS_PLUGIN == 'true' && format('--plugin-dir {0}/miru-internal', github.workspace) || '' }}
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*)"
-            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string","enum":["blocking","nit"]},"unchanged_since_approval":{"type":"boolean"},"description":{"type":"string"}},"required":["file","severity","description"]}}},"required":["findings"]}'
+            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string","enum":["blocking","nit"]},"description":{"type":"string"}},"required":["file","severity","description"]}}},"required":["findings"]}'
 
       # A reviewer without a valid result fails its job, so the verify
       # job fails closed rather than verifying only some of the angles.
@@ -612,8 +483,6 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             HEAD SHA: ${{ github.event.pull_request.head.sha }}
-            REVIEW SCOPE: ${{ needs.prepare.outputs.mode }}
-            LAST APPROVED SHA: ${{ needs.prepare.outputs.approved_sha }}
 
             You are the required automated reviewer for this pull request.
             A PR cannot merge until you approve its latest commit.
@@ -669,12 +538,10 @@ jobs:
               it blocking.
 
             Post each finding you keep as an inline comment on the relevant
-            line. Start it with "Blocking:" or "nit:", then "Missed
-            earlier:" if REVIEW SCOPE is "incremental" and the code hasn't
-            changed since LAST APPROVED SHA. A review-question nit names its
-            question. Post at most 5 nits per round. If you have more, keep
-            the 5 most likely to change the code and drop the rest; do not
-            list them in the summary either.
+            line. Start it with "Blocking:" or "nit:". A review-question
+            nit names its question. Post at most 5 nits per round. If you
+            have more, keep the 5 most likely to change the code and drop
+            the rest; do not list them in the summary either.
 
             Write for a busy reader who stops after the first sentence:
             - An inline comment is at most 3 short sentences: the problem,
@@ -714,12 +581,7 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RESULT: ${{ steps.verify.outputs.structured_output }}
-          MODE: ${{ needs.prepare.outputs.mode }}
-          APPROVED_SHA: ${{ needs.prepare.outputs.approved_sha }}
           COMMENT_ID: ${{ needs.prepare.outputs.comment_id }}
-          ROUNDS: ${{ needs.prepare.outputs.rounds }}
-          HEAD_MB: ${{ needs.prepare.outputs.head_mb }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           set_status() {
@@ -728,34 +590,13 @@ jobs:
               -f description="$2" -f target_url="$run_url" >/dev/null
           }
 
-          # No PR diff change since the approved commit: Claude didn't run.
-          rounds=${ROUNDS:-0}
-          case "$MODE" in
-          carry)
-            RESULT=$(jq -nc --arg sha "${APPROVED_SHA:0:7}" '{verdict: "approve",
-              summary: "The PR diff is unchanged since the approved commit `\($sha)`, so the approval carries over.",
-              blocking_findings: []}')
-            scope=" (carried from \`${APPROVED_SHA:0:7}\`)"
-            ;;
-          incremental)
-            rounds=$((rounds + 1))
-            scope=" (changes since \`${APPROVED_SHA:0:7}\`)"
-            ;;
-          *)
-            rounds=$((rounds + 1))
-            scope=""
-            ;;
-          esac
-
           verdict=$(jq -r '.verdict // empty' <<<"${RESULT:-}" 2>/dev/null || true)
           case "$verdict" in
           approve)
-            state=success description="Approved by Claude" approved=$SHA mb=${HEAD_MB:-none}
+            state=success description="Approved by Claude"
             ;;
           request_changes)
-            # A blocker may sit in code an earlier round approved, so the
-            # next round reviews the whole PR.
-            state=failure description="Claude found blocking issues" approved=none mb=none
+            state=failure description="Claude found blocking issues"
             ;;
           *)
             set_status error "Review did not complete; re-run the job"
@@ -768,10 +609,9 @@ jobs:
           findings=$(jq -r '.blocking_findings[]
             | "- `\(.file)\(if .line then ":\(.line)" else "" end)`: \(.description)"' \
             <<<"$RESULT")
-          # One summary comment per PR, edited each round. The marker
-          # records the approved commit, its merge base and base branch for
-          # the next round's scope, and the count of rounds Claude ran.
-          body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`$scope
+          # One summary comment per PR, edited each round; the marker lets
+          # the next round find it.
+          body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`
 
           $summary
           ${findings:+
@@ -779,8 +619,8 @@ jobs:
 
           $findings
           }
-          [Review run]($run_url) · round $rounds
-          <!-- ai-review-summary approved=$approved mb=$mb base=$BASE_REF rounds=$rounds -->"
+          [Review run]($run_url)
+          <!-- ai-review-summary -->"
 
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
           if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
