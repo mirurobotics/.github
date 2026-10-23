@@ -5,12 +5,9 @@
 # reviewed its latest commit and found no blocking issues. Draft PRs are
 # skipped; marking a PR ready starts the review.
 #
-# Seven Claude reviewers read the PR in parallel, one angle each
-# (correctness, security, reliability, tests, contracts, documentation,
-# review questions), and report candidate findings. A verifier checks
-# each one against the code, posts those that hold up, and decides the
-# verdict. Every push reviews the whole PR. Each PR gets one summary
-# comment, edited every round, rather than one comment per push.
+# Each push, seven reviewers read the whole PR in parallel, one angle
+# each, and a verifier posts the findings that hold up and sets the
+# verdict. Each PR gets one summary comment, edited every round.
 #
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
@@ -39,22 +36,13 @@
 # Pin to a commit SHA so a change here reaches a repo only through a
 # reviewed PR that bumps it.
 #
-# Provide one credential: ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN
-# (generate with `claude setup-token`). It must exist as both an Actions
-# and a Dependabot secret (Dependabot-triggered runs only see Dependabot
-# secrets). The caller repo
-# must allow `anthropics/claude-code-action@*`.
+# Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
+# as both an Actions and a Dependabot secret. The caller repo must allow
+# `anthropics/claude-code-action@*`.
 #
-# AGENTS_READ_TOKEN is optional: a read-only token for the private
-# mirurobotics/agents repo (a fine-grained PAT or GitHub App token with
-# Contents: read on that repo only). With it and `agents-ref`, a commit
-# SHA of mirurobotics/agents, the reviewers and the verifier check out
-# that commit and load the miru-internal plugin (shared rules and skills)
-# with --plugin-dir. Pin it like this workflow: the plugin runs in a job
-# that can post statuses. Without both, they run on the repo's own
-# CLAUDE.md or AGENTS.md only.
-# Give it to private repos only: review comments on a public PR could
-# quote the private rules.
+# Optional: AGENTS_READ_TOKEN (Contents: read on mirurobotics/agents) plus
+# `agents-ref` (a commit SHA there) loads the miru-internal plugin. Private
+# repos only: comments could quote the private rules.
 
 # yamllint disable rule:line-length
 name: AI Review
@@ -122,10 +110,9 @@ jobs:
             -f description="Claude is reviewing this commit" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-      # Earlier review threads and the PR conversation, so the verifier can
-      # skip points that were already raised and answered. Fetched here
-      # rather than giving Claude `gh api`, whose token can post statuses.
-      # A failed fetch fails the job (and the review, closed); re-run it.
+      # Earlier threads and the PR conversation, so the verifier skips
+      # settled points. Fetched here so Claude never gets `gh api`, whose
+      # token can post statuses.
       - name: Collect prior review comments
         env:
           GH_TOKEN: ${{ github.token }}
@@ -196,9 +183,8 @@ jobs:
           path: ai-review-context
           retention-days: 1
 
-  # Seven independent reviewers, one angle each. Each starts fresh, reports
-  # candidate findings as JSON and posts nothing; the verify job checks
-  # them. Separate passes catch different problems than one long pass.
+  # Seven reviewers, one angle each. They report findings as JSON and
+  # post nothing.
   review:
     needs: prepare
     timeout-minutes: 30
@@ -332,9 +318,8 @@ jobs:
           path: miru-internal
           persist-credentials: false
 
-      # Reviewers get the PR description as a file rather than `gh pr
-      # view`, which prints comments. Earlier threads would tell them
-      # which code was already passed; only the verifier reads them.
+      # The description, but not earlier threads (hence no `gh pr view`),
+      # so reviewers judge the code fresh.
       - name: Save PR description
         env:
           TITLE: ${{ github.event.pull_request.title }}
@@ -402,8 +387,7 @@ jobs:
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*)"
             --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string","enum":["blocking","nit"]},"description":{"type":"string"}},"required":["file","severity","description"]}}},"required":["findings"]}'
 
-      # A reviewer without a valid result fails its job, so the verify
-      # job fails closed rather than verifying only some of the angles.
+      # No valid result fails the job, so verify fails closed.
       - name: Save findings
         env:
           RESULT: ${{ steps.review.outputs.structured_output }}
@@ -419,9 +403,8 @@ jobs:
           path: ai-review-findings
           retention-days: 1
 
-  # Checks every candidate finding against the code, posts the ones that
-  # hold up, and decides the verdict. Always runs, so a failed or skipped
-  # job upstream still ends in a status.
+  # Checks the findings, posts what holds up and sets the verdict. Always
+  # runs, so every round ends in a status.
   verify:
     needs: [prepare, review]
     if: ${{ always() && !github.event.pull_request.draft }}
