@@ -109,6 +109,16 @@ jobs:
       rounds: ${{ steps.scope.outputs.rounds }}
       head_mb: ${{ steps.scope.outputs.head_mb }}
     steps:
+      # A branch name would load whatever is pushed to it next.
+      - name: Check agents-ref is a commit SHA
+        env:
+          AGENTS_REF: ${{ inputs.agents-ref }}
+        run: |
+          if [ -n "$AGENTS_REF" ] && ! [[ $AGENTS_REF =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::agents-ref must be a 40-character commit SHA"
+            exit 1
+          fi
+
       - name: Set status pending
         env:
           GH_TOKEN: ${{ github.token }}
@@ -544,7 +554,7 @@ jobs:
   verify:
     needs: [prepare, review]
     if: ${{ always() && !github.event.pull_request.draft }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ${{ inputs.runs-on }}
     env:
       HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' && inputs.agents-ref != '' }}
