@@ -56,7 +56,7 @@ on:
         type: string
         default: high
       allowed-bots:
-        description: Comma-separated bot usernames whose PRs may trigger a review
+        description: Comma-separated bot usernames allowed to trigger the review ('*' allows all bots)
         type: string
         default: "dependabot[bot]"
     secrets:
