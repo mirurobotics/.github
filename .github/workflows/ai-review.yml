@@ -23,7 +23,7 @@
 #     ai-review:
 #       uses: mirurobotics/.github/.github/workflows/ai-review.yml@<commit-sha>
 #       with:
-#         effort: high  # optional; also `model` and `runs-on`
+#         effort: high  # optional; also `model`, `runs-on` and `allowed-bots`
 #       secrets:
 #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 #         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -55,6 +55,10 @@ on:
         description: Claude effort level (low, medium, high, xhigh, max)
         type: string
         default: high
+      allowed-bots:
+        description: Comma-separated bot usernames whose PRs may trigger a review
+        type: string
+        default: "dependabot[bot]"
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic API key. Set this or CLAUDE_CODE_OAUTH_TOKEN.
@@ -159,7 +163,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          allowed_bots: "dependabot[bot]"
+          allowed_bots: ${{ inputs.allowed-bots }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
