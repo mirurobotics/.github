@@ -27,7 +27,7 @@
 #     ai-review:
 #       uses: mirurobotics/.github/.github/workflows/ai-review.yml@<commit-sha>
 #       with:
-#         effort: max  # optional; also `model`, `runs-on` and `agents-ref`
+#         effort: max  # optional; also `model` and `runs-on`
 #       secrets:
 #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 #         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -40,9 +40,9 @@
 # as both an Actions and a Dependabot secret. The caller repo must allow
 # `anthropics/claude-code-action@*`.
 #
-# Optional: AGENTS_READ_TOKEN (Contents: read on mirurobotics/agents) plus
-# `agents-ref` (a commit SHA there) loads the miru-internal plugin. Private
-# repos only: comments could quote the private rules.
+# Optional: AGENTS_READ_TOKEN (Contents: read on mirurobotics/agents) loads
+# the miru-internal plugin at AGENTS_REF. Set it as an organization secret
+# shared with private repos only, since comments could quote private rules.
 
 # yamllint disable rule:line-length
 name: AI Review
@@ -62,10 +62,6 @@ on:
         description: Claude effort level (low, medium, high, xhigh, max)
         type: string
         default: max
-      agents-ref:
-        description: Commit SHA of mirurobotics/agents to load the miru-internal plugin from. Needs AGENTS_READ_TOKEN.
-        type: string
-        default: ""
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic API key. Set this or CLAUDE_CODE_OAUTH_TOKEN.
@@ -79,6 +75,8 @@ on:
 
 env:
   STATUS_CONTEXT: ai-review
+  # mirurobotics/agents commit the miru-internal plugin loads from.
+  AGENTS_REF: 6fde90cda3e34c4de40e169a2659f6357694d2ef
 
 jobs:
   # Sets the pending status and collects earlier review rounds for the
@@ -90,16 +88,6 @@ jobs:
     outputs:
       comment_id: ${{ steps.summary.outputs.comment_id }}
     steps:
-      # A branch name would load whatever is pushed to it next.
-      - name: Check agents-ref is a commit SHA
-        env:
-          AGENTS_REF: ${{ inputs.agents-ref }}
-        run: |
-          if [ -n "$AGENTS_REF" ] && ! [[ $AGENTS_REF =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::agents-ref must be a 40-character commit SHA"
-            exit 1
-          fi
-
       - name: Set status pending
         env:
           GH_TOKEN: ${{ github.token }}
@@ -190,7 +178,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ inputs.runs-on }}
     env:
-      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' && inputs.agents-ref != '' }}
+      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -313,7 +301,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mirurobotics/agents
-          ref: ${{ inputs.agents-ref }}
+          ref: ${{ env.AGENTS_REF }}
           token: ${{ secrets.AGENTS_READ_TOKEN }}
           path: miru-internal
           persist-credentials: false
@@ -411,7 +399,7 @@ jobs:
     timeout-minutes: 60
     runs-on: ${{ inputs.runs-on }}
     env:
-      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' && inputs.agents-ref != '' }}
+      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' }}
       REVIEWED: ${{ needs.review.result == 'success' }}
     steps:
       - name: Checkout base
@@ -433,7 +421,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mirurobotics/agents
-          ref: ${{ inputs.agents-ref }}
+          ref: ${{ env.AGENTS_REF }}
           token: ${{ secrets.AGENTS_READ_TOKEN }}
           path: miru-internal
           persist-credentials: false
