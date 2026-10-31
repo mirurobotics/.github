@@ -41,8 +41,8 @@
 # `anthropics/claude-code-action@*`.
 #
 # Optional: AGENTS_READ_TOKEN (Contents: read on mirurobotics/agents) loads
-# the miru-internal plugin at AGENTS_REF. Set it as an organization secret
-# shared with private repos only, since comments could quote private rules.
+# the miru-internal plugin at AGENTS_REF, in private repos only, since
+# comments could quote private rules. Set it as an organization secret.
 
 # yamllint disable rule:line-length
 name: AI Review
@@ -179,7 +179,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ inputs.runs-on }}
     env:
-      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' }}
+      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' && github.event.repository.private }}
     strategy:
       fail-fast: false
       matrix:
@@ -400,7 +400,7 @@ jobs:
     timeout-minutes: 60
     runs-on: ${{ inputs.runs-on }}
     env:
-      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' }}
+      HAS_PLUGIN: ${{ secrets.AGENTS_READ_TOKEN != '' && github.event.repository.private }}
       REVIEWED: ${{ needs.review.result == 'success' }}
     steps:
       - name: Checkout base
