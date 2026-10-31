@@ -154,13 +154,14 @@ jobs:
                 + ((.body // "") | split("\n") | map("> " + .) | join("\n"))
                 + "\n"' "$RUNNER_TEMP/issue-comments.json" >"$dir/conversation.md"
 
-      # The one summary comment this workflow edits each round.
+      # The one summary comment this workflow edits each round. Matching the
+      # heading also finds summaries from older versions of this workflow.
       - name: Find summary comment
         id: summary
         run: |
           id=$(jq -rs '[add // [] | .[]
             | select(.user.login == "github-actions[bot]"
-              and ((.body // "") | contains("<!-- ai-review-summary")))]
+              and ((.body // "") | startswith("### AI review:")))]
             | last | .id // ""' "$RUNNER_TEMP/issue-comments.json")
           echo "comment_id=$id" >>"$GITHUB_OUTPUT"
 
@@ -580,8 +581,7 @@ jobs:
           findings=$(jq -r '.blocking_findings[]
             | "- `\(.file)\(if .line then ":\(.line)" else "" end)`: \(.description)"' \
             <<<"$RESULT")
-          # One summary comment per PR, edited each round; the marker lets
-          # the next round find it.
+          # One summary comment per PR, edited each round.
           body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`
 
           $summary
@@ -590,8 +590,7 @@ jobs:
 
           $findings
           }
-          [Review run]($run_url)
-          <!-- ai-review-summary -->"
+          [Review run]($run_url)"
 
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
           if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
