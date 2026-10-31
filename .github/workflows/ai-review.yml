@@ -570,7 +570,7 @@ jobs:
             state=failure description="Claude found blocking issues"
             ;;
           *)
-            set_status error "Review did not complete; re-run the job"
+            set_status error "Review did not complete; re-run all jobs"
             echo "::error::AI review produced no verdict"
             exit 1
             ;;
