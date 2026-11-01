@@ -82,8 +82,8 @@ env:
   AGENTS_REF: 6fde90cda3e34c4de40e169a2659f6357694d2ef
 
 jobs:
-  # Sets the pending status and collects earlier review rounds for the
-  # verifier.
+  # Sets the pending status, collects earlier review rounds for the
+  # verifier, and builds the PR diff without generated files.
   prepare:
     if: ${{ !github.event.pull_request.draft }}
     timeout-minutes: 10
