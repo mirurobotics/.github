@@ -303,7 +303,7 @@ jobs:
             other work is in flight.
           EOF
           angle security 0 <<'EOF'
-          Your angle is security (miru-internal:security if available).
+          Your angle is security (the security skill, if available).
           - Follow untrusted input (requests, MQTT messages, files, PR
             content in CI) from where it enters to where it is used:
             injection, path traversal, unbounded sizes, unsafe parsing.
@@ -314,7 +314,7 @@ jobs:
             wider than the job needs.
           EOF
           angle reliability 101 <<'EOF'
-          Your angle is reliability (miru-internal:reliability if
+          Your angle is reliability (the reliability skill, if
           available): what happens when things fail or run long.
           - Error handling: errors swallowed, retried forever, or
             retried when they can't succeed.
@@ -350,7 +350,7 @@ jobs:
             retention that a reviewer should notice.
           EOF
           angle documentation 401 <<'EOF'
-          Your angle is documentation (miru-internal:document if
+          Your angle is documentation (the document skill, if
           available): whether the docs still tell the truth after this
           change.
           - Find READMEs, doc comments, API docs, examples, CLI help
