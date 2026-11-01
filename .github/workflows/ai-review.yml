@@ -509,7 +509,7 @@ jobs:
           *) fail "AI review produced no verdict" ;;
           esac
           want=$(printf '%s\n' ai-review-context/angles/*.md | jq -Rnr '[inputs | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")')
-          got=$(jq -r '[.angles[] | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")' <<<"$RESULT")
+          got=$(jq -r '[.angles[] | gsub("[\r\n]"; " ") | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")' <<<"$RESULT")
           [ "$got" = "$want" ] || fail "Reviewers that replied ($got) don't match the angles run ($want)"
 
           summary=$(jq -r '.summary' <<<"$RESULT")
