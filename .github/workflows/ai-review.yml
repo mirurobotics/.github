@@ -10,7 +10,8 @@
 # verdict. Each PR gets one summary comment, edited every round.
 #
 # Files the base branch's .gitattributes marks `linguist-generated` or
-# `linguist-vendored` are left out of the review. Mark only paths that a
+# `linguist-vendored` are left out of the review, unless the PR changes a
+# .gitattributes file. Mark only paths that a
 # CI check regenerates or re-vendors from scratch and compares, so a hand
 # edit or an added file there still fails CI.
 #
@@ -216,12 +217,15 @@ jobs:
             | git -C base check-attr -z --stdin linguist-generated linguist-vendored \
               >"$RUNNER_TEMP/attrs"
           # check-attr prints NUL-separated path, attribute, value triples.
-          # Paths are written one per line, so line breaks become spaces.
+          # Nothing is skipped in a PR that changes a .gitattributes file,
+          # so a PR can't un-mark a path and edit it unseen. Paths are
+          # written one per line, so line breaks become spaces.
           jq --rawfile attrs "$RUNNER_TEMP/attrs" '
             ($attrs | split("\u0000")) as $a
             | (reduce range(2; $a | length; 3) as $i ({};
                 if $a[$i] == "set" or $a[$i] == "true" then .[$a[$i - 2]] = true else . end)) as $marked
-            | map(.generated = ($marked[.filename] and $marked[.previous_filename // .filename])
+            | any(.[] | .filename, .previous_filename // empty; test("(^|/)\\.gitattributes$")) as $attrs_changed
+            | map(.generated = (($attrs_changed | not) and $marked[.filename] and $marked[.previous_filename // .filename])
               | .new = (.filename | gsub("[\r\n]"; " "))
               | .old = (.previous_filename // .filename | gsub("[\r\n]"; " ")))' \
             "$files" >"$RUNNER_TEMP/pr-files-marked.json"
