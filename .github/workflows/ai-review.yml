@@ -492,7 +492,8 @@ jobs:
               -f description="$2" -f target_url="$run_url" >/dev/null
           }
           fail() {
-            set_status error "Review did not complete; re-run the job"
+            set_status error "Review did not complete; see the run log"
+
             echo "::error::$1"
             exit 1
           }
