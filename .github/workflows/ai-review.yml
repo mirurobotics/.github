@@ -45,8 +45,10 @@
 # Private repos must pass AGENTS_READ_TOKEN (Contents: read on
 # mirurobotics/agents), set as both an Actions and a Dependabot
 # organization secret. It loads the miru-internal plugin at AGENTS_REF;
-# without it the review fails. Public repos skip the plugin, since
-# comments could quote private rules.
+# without it the review fails. Add the `AGENTS_READ_TOKEN:` line in the
+# PR that bumps the pin, since pull_request_target runs the base
+# branch's caller. Public repos skip the plugin, since comments could
+# quote private rules.
 
 # yamllint disable rule:line-length
 name: AI Review
