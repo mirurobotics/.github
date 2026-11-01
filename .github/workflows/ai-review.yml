@@ -476,8 +476,9 @@ jobs:
             The summary is at most 3 sentences: the verdict's reason and
             anything that needs a decision. Don't recap the PR or restate
             the inline comments or blocking findings. Each blocking_findings
-            description is one sentence. In angles, list the bare name of every angle whose
-            reviewer replied, such as "correctness" for correctness.md.
+            description is one sentence. In angles, list the bare name of
+            every angle whose reviewer replied with a JSON array, such as
+            "correctness" for correctness.md.
           claude_args: |
             --model ${{ inputs.model }}
             --effort ${{ inputs.effort }}
