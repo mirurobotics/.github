@@ -434,10 +434,12 @@ jobs:
                wait for its reply; leave its angle out of `angles` if it
                fails again.
             2. Check each finding against the code yourself: the diff is in
-               ./ai-review-context/pr.diff, the PR head in ./pr-head and the
-               base branch at the workspace root. Drop findings that are
-               wrong or that a linter, compiler or test run would catch,
-               merge duplicates, and add problems you find while checking.
+               ./ai-review-context/pr.diff, the title and description in
+               ./ai-review-context/pr-description.md, the PR head in
+               ./pr-head and the base branch at the workspace root. Drop
+               findings that are wrong or that a linter, compiler or test run
+               would catch, merge duplicates, and add problems you find while
+               checking.
             3. Don't re-post a point an open thread already raises, and drop
                points an earlier round settled. ./ai-review-history holds
                the inline threads (review-threads.md) and the PR
