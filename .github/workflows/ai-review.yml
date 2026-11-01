@@ -11,9 +11,10 @@
 #
 # Files the base branch's .gitattributes marks `linguist-generated` or
 # `linguist-vendored` are left out of the review, unless the PR changes a
-# .gitattributes file. Mark only paths that a
-# CI check regenerates or re-vendors from scratch and compares, so a hand
-# edit or an added file there still fails CI.
+# .gitattributes file. Mark only paths that a required CI check deletes,
+# regenerates or re-vendors, and compares on every PR, so a hand edit or
+# an added file there still fails CI. Add marks in a PR after the one that
+# bumps this workflow's pin, since the bump PR is reviewed by the old pin.
 #
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
@@ -281,11 +282,12 @@ jobs:
               - Look for secrets or tokens in code, logs and errors,
                 weakened crypto or TLS, and workflow or token permissions
                 wider than the job needs.
-              - A .gitattributes change that marks files
-                linguist-generated or linguist-vendored takes them out of
-                this review on later PRs: check that CI regenerates or
-                re-vendors everything each new pattern matches and fails
-                on any difference.
+              - Marking files linguist-generated or linguist-vendored in
+                .gitattributes takes them out of this review on later PRs.
+                For each new pattern, check that a required CI check
+                deletes, regenerates or re-vendors, and compares everything
+                it matches on every PR. Flag CI changes that stop doing so
+                for a path that is already marked.
           - lens: reliability
             focus: |
               Your angle is reliability (miru-internal:reliability if
