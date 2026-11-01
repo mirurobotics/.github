@@ -44,11 +44,11 @@
 #
 # Private repos must pass AGENTS_READ_TOKEN (Contents: read on
 # mirurobotics/agents), set as both an Actions and a Dependabot
-# organization secret. It loads the miru-internal plugin at AGENTS_REF;
-# without it the review fails. Add the `AGENTS_READ_TOKEN:` line in the
+# organization secret. Reviewers read the miru-internal rules and skills
+# from mirurobotics/agents at AGENTS_REF; without it the review fails. Add the `AGENTS_READ_TOKEN:` line in the
 # PR that bumps the pin, since pull_request_target runs the base
-# branch's caller. Public repos skip the plugin, since comments could
-# quote private rules.
+# branch's caller. Public repos skip the rules and skills, since comments
+# could quote them.
 
 # yamllint disable rule:line-length
 name: AI Review
@@ -76,12 +76,12 @@ on:
         description: Claude Code OAuth token from `claude setup-token` (Pro/Max/Team plans).
         required: false
       AGENTS_READ_TOKEN:
-        description: Read access to mirurobotics/agents, to load the miru-internal plugin. Required in private repos.
+        description: Read access to mirurobotics/agents, for the miru-internal rules and skills. Required in private repos.
         required: false
 
 env:
   STATUS_CONTEXT: ai-review
-  # mirurobotics/agents commit the miru-internal plugin loads from.
+  # mirurobotics/agents commit the miru-internal rules and skills come from.
   AGENTS_REF: 6fde90cda3e34c4de40e169a2659f6357694d2ef
 
 jobs:
@@ -128,7 +128,7 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout miru-internal plugin
+      - name: Checkout miru-internal rules and skills
         if: github.event.repository.private
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
