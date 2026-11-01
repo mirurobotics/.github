@@ -1,0 +1,16 @@
+# Temporary: runs this branch's ai-review workflow on its own draft PR
+# (#17) before the real PR. Deleted after the test.
+name: tmp ai-review next
+on:
+  pull_request:
+    types: [synchronize]
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+jobs:
+  ai-review:
+    uses: ./.github/workflows/tmp-ai-review-next.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
