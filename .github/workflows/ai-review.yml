@@ -213,9 +213,10 @@ jobs:
             exit 1
           fi
           # Old paths are checked too: a renamed file counts as generated
-          # only if both its paths are marked.
+          # only if both its paths are marked. Matching stays case-sensitive
+          # on macOS runners too, where git init turns on core.ignorecase.
           jq -j '.[] | (.filename, .previous_filename // empty) + "\u0000"' "$files" \
-            | git -C base check-attr -z --stdin linguist-generated linguist-vendored \
+            | git -C base -c core.ignorecase=false check-attr -z --stdin linguist-generated linguist-vendored \
               >"$RUNNER_TEMP/attrs"
           # check-attr prints NUL-separated path, attribute, value triples.
           # Nothing is skipped in a PR that changes a .gitattributes file,
