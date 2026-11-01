@@ -278,8 +278,9 @@ jobs:
             code, test, workflow or skill do the wrong thing: a bug, a security
             issue, data loss, a test that passes against a broken
             implementation, or an agent workflow that would stall or act
-            wrongly. That holds even if the code isn't wired up yet or the PR
-            only changes docs or tests. Everything else is "nit".
+            wrongly. That holds even if the code isn't wired up yet, the PR
+            only changes docs or tests, or you can't run it. Everything else
+            is "nit".
 
           Reply with only a JSON array of findings, or [] if you found none:
           [{"file": "path/to/file", "line": 42, "severity": "blocking", "description": "..."}]
