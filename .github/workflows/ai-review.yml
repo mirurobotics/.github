@@ -395,7 +395,8 @@ jobs:
           jq -cn --arg tools "$tools" '{reviewer: {
               description: "Reviews the PR from one angle and replies with its findings as JSON. Posts nothing.",
               prompt: "You review one pull request from one angle. First read ./ai-review-context/reviewer.md and follow it. Your task names the file that describes your angle.",
-              tools: ($tools | split(",")), model: "inherit"}}' \
+              tools: ($tools | split(",")), model: "inherit", maxTurns: 100}}'
+ \
             | sed 's/^/agents=/' >>"$GITHUB_OUTPUT"
 
       - name: Review
