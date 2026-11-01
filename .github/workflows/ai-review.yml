@@ -467,7 +467,7 @@ jobs:
           request_changes) state=failure description="Claude found blocking issues" ;;
           *) fail "AI review produced no verdict" ;;
           esac
-          want=$(ls ai-review-context/angles | jq -Rnr '[inputs | rtrimstr(".md")] | unique | join(",")')
+          want=$(printf '%s\n' ai-review-context/angles/*.md | jq -Rnr '[inputs | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")')
           got=$(jq -r '[.angles[] | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")' <<<"$RESULT")
           [ "$got" = "$want" ] || fail "Reviewers that replied ($got) don't match the angles run ($want)"
 
