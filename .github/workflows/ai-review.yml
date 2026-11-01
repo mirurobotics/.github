@@ -428,13 +428,12 @@ jobs:
 
             The PR's files are checked out at ./pr-head and the base branch
             at the workspace root. Read the diff in
-            ./ai-review-context/pr.diff, then read each changed file in full
-            in ./pr-head, not only the hunks. The diff leaves out the
+            ./ai-review-context/pr.diff, then read each file it covers in
+            full in ./pr-head, not only the hunks. The diff leaves out the
             generated and vendored files listed in
             ./ai-review-context/generated-files.txt. Don't review them or
             report findings on them; open one only to check code that uses
-            it. The PR's
-            title and description are in
+            it. The PR's title and description are in
             ./ai-review-context/pr-description.md. Follow the
             repo's CLAUDE.md or AGENTS.md if present, and read
             ARCHITECTURE.md if present: its layer and placement rules are
@@ -445,8 +444,9 @@ jobs:
             at session start apply, and miru-internal:review defines the
             review lenses. Load the lens skills that fit your angle, with
             the checklist for each changed file's language, and apply them
-            yourself rather than spawning subagents. Review this PR's diff
-            rather than uncommitted changes, and report through the output
+            yourself rather than spawning subagents. Review
+            ./ai-review-context/pr.diff rather than uncommitted changes or
+            the full PR diff, and report through the output
             below rather than the skill's output contract.
 
             Lints and tests run in separate CI jobs. Don't report what a
