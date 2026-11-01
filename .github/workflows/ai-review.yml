@@ -239,7 +239,7 @@ jobs:
                 elif .status == "removed" then "deleted file\n"
                 elif .status == "renamed" then "rename from \(.old)\nrename to \(.new)\n"
                 else "" end)
-              + (.patch // "(no patch from GitHub: binary, unchanged, or too large to diff)")' \
+              + (.patch // "(no patch from GitHub: binary, only renamed or its mode changed, or too large to diff)")' \
             "$RUNNER_TEMP/pr-files-marked.json" >"$dir/pr.diff"
 
       - name: Upload diff
