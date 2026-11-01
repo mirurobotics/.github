@@ -200,7 +200,9 @@ jobs:
           files="$RUNNER_TEMP/pr-files.json"
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
             | jq -s 'add // []' >"$files"
-          jq -j '.[] | .filename + "\u0000"' "$files" \
+          # Old paths are checked too: a renamed file counts as generated
+          # only if both its paths are marked.
+          jq -j '.[] | (.filename, .previous_filename // empty) + "\u0000"' "$files" \
             | git -C base check-attr -z --stdin linguist-generated linguist-vendored \
               >"$RUNNER_TEMP/attrs"
           # check-attr prints NUL-separated path, attribute, value triples.
@@ -209,7 +211,7 @@ jobs:
             ($attrs | split("\u0000")) as $a
             | (reduce range(2; $a | length; 3) as $i ({};
                 if $a[$i] == "set" or $a[$i] == "true" then .[$a[$i - 2]] = true else . end)) as $marked
-            | map(.generated = ($marked[.filename] // false)
+            | map(.generated = ($marked[.filename] and $marked[.previous_filename // .filename])
               | .new = (.filename | gsub("[\r\n]"; " "))
               | .old = (.previous_filename // .filename | gsub("[\r\n]"; " ")))' \
             "$files" >"$RUNNER_TEMP/pr-files-marked.json"
