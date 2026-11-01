@@ -235,7 +235,7 @@ jobs:
           dir="$GITHUB_WORKSPACE/ai-review-context"
           files="$RUNNER_TEMP/pr-files.json"
           lines=$(jq '[.[] | .additions + .deletions] | add // 0' "$files")
-          tests=$(jq 'any(.[]; .filename | test("(_tests?|_spec|\\.test|\\.spec|Tests?)\\.|(^|/)(test_|tests?[./]|__tests__/|spec/|testdata/|conftest\\.py$)"))' "$files")
+          tests=$(jq 'any(.[]; (.filename, .previous_filename // empty) | test("(_tests?|_spec|\\.test|\\.spec|Tests?)\\.|(^|/)(test_|tests?[./]|__tests__/|spec/|testdata/|conftest\\.py$)"))' "$files")
           echo "$lines changed lines; test files changed: $tests"
           mkdir -p "$dir/angles"
           # angle NAME MIN_LINES [tests]: stdin becomes NAME's angle file once
