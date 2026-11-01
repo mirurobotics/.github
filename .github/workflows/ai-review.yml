@@ -203,9 +203,9 @@ jobs:
             done | sort -u >"$dir/generated-files.txt"
           # --exclude takes globs, so escape glob characters in each path.
           excludes=()
-          while IFS= read -r path; do
-            excludes+=(--exclude "$(sed 's/[][*?\\]/\\&/g' <<<"$path")")
-          done <"$dir/generated-files.txt"
+          while IFS= read -r pattern; do
+            excludes+=(--exclude "$pattern")
+          done < <(sed 's/[][*?\\]/\\&/g' "$dir/generated-files.txt")
           gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "${excludes[@]}" >"$dir/pr.diff"
 
       - name: Upload diff
