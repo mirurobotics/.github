@@ -400,11 +400,11 @@ jobs:
             | sed 's/^/agents=/' >>"$GITHUB_OUTPUT"
 
       # The action writes github.token into ./.git/config, so nothing in the
-      # session may read ./.git.
+      # session may read ./.git. Its timeout stays under the job's so Record
+      # verdict can still set an error status if the session hangs.
       - name: Review
         id: review
         timeout-minutes: 80
-
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -474,7 +474,6 @@ jobs:
             --agents '${{ steps.instructions.outputs.agents }}'
             --allowedTools "${{ steps.instructions.outputs.tools }},Agent,Task,mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Read(./.git/**)"
-
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"description":{"type":"string"}},"required":["file","description"]}},"angles":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings","angles"]}'
 
       # Fail closed: any error, timeout, missing angle or missing verdict
@@ -494,7 +493,6 @@ jobs:
           }
           fail() {
             set_status error "Review did not complete; see the run log"
-
             echo "::error::$1"
             exit 1
           }
