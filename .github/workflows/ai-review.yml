@@ -425,7 +425,8 @@ jobs:
                reply before you go on. Give each only the task "Your angle
                is ./ai-review-context/angles/<file>.", so it judges the code
                fresh. If a reviewer fails or doesn't reply with a JSON array,
-               start it once more; leave its angle out of `angles` if it
+               start it once more, again with run_in_background false, and
+               wait for its reply; leave its angle out of `angles` if it
                fails again.
             2. Check each finding against the code yourself: the diff is in
                ./ai-review-context/pr.diff, the PR head in ./pr-head and the
