@@ -85,7 +85,7 @@ env:
 jobs:
   review:
     if: ${{ !github.event.pull_request.draft }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -403,7 +403,8 @@ jobs:
       # session may read ./.git.
       - name: Review
         id: review
-        timeout-minutes: 50
+        timeout-minutes: 80
+
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
