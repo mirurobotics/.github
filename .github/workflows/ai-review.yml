@@ -230,7 +230,6 @@ jobs:
       # security and contracts always run; the rest join as the diff
       # grows, and tests also whenever a test file changes.
       - name: Write reviewer instructions
-        id: instructions
         run: |
           set -euo pipefail
           dir="$GITHUB_WORKSPACE/ai-review-context"
@@ -392,12 +391,6 @@ jobs:
           EOF
           ls "$dir/angles"
 
-          jq -cn '{reviewer: {
-              description: "Reviews the PR from one angle and replies with its findings as JSON. Posts nothing.",
-              prompt: "You review one pull request from one angle. First read ./ai-review-context/reviewer.md and follow it. Your task names the file that describes your angle.",
-              tools: ["Read", "Grep", "Glob"], model: "inherit", maxTurns: 100}}' \
-            | sed 's/^/agents=/' >>"$GITHUB_OUTPUT"
-
       # The action writes github.token into ./.git/config, and /proc holds the
       # session's own key, so nothing in the session may read either. Bash,
       # file edits, web access and Skill are denied too: --add-dir can load
@@ -480,7 +473,7 @@ jobs:
             --effort ${{ inputs.effort }}
             --max-turns 150
             --add-dir pr-head
-            --agents '${{ steps.instructions.outputs.agents }}'
+            --agents '{"reviewer":{"description":"Reviews the PR from one angle and replies with its findings as JSON. Posts nothing.","prompt":"You review one pull request from one angle. First read ./ai-review-context/reviewer.md and follow it. Your task names the file that describes your angle.","tools":["Read","Grep","Glob"],"model":"inherit","maxTurns":100}}'
             --allowedTools "Read,Grep,Glob,Agent,Task,mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Read(./.git/**),Read(//proc/**),Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Skill"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"description":{"type":"string"}},"required":["file","description"]}},"angles":{"type":"array","items":{"type":"string"}}},"required":["verdict","summary","blocking_findings","angles"]}'
