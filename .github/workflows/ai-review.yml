@@ -406,6 +406,9 @@ jobs:
         id: review
         timeout-minutes: 80
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
+        env:
+          # Keeps reviewers in the foreground, so the session waits for them.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -420,13 +423,13 @@ jobs:
             A PR cannot merge until you approve its latest commit.
 
             1. Start one `reviewer` agent per file in
-               ./ai-review-context/angles/, all in one message and with
-               run_in_background false, so they run in parallel and all
-               reply before you go on. Give each only the task "Your angle
+               ./ai-review-context/angles/, all in one message and in the
+               foreground, so they run in parallel and all reply before you
+               go on. Give each only the task "Your angle
                is ./ai-review-context/angles/<file>.", so it judges the code
                fresh. If a reviewer fails or doesn't reply with a JSON array,
-               start it once more, again with run_in_background false, and
-               wait for its reply; leave its angle out of `angles` if it
+               start it once more, again in the foreground, and wait for
+               its reply; leave its angle out of `angles` if it
                fails again.
             2. Check each finding against the code yourself: the diff is in
                ./ai-review-context/pr.diff, the title and description in
