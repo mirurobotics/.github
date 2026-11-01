@@ -226,8 +226,8 @@ jobs:
             ($attrs | split("\u0000")) as $a
             | (reduce range(2; $a | length; 3) as $i ({};
                 if $a[$i] == "set" or $a[$i] == "true" then .[$a[$i - 2]] = true else . end)) as $marked
-            | any(.[] | .filename, .previous_filename // empty; test("(^|/)\\.gitattributes$")) as $attrs_changed
-            | map(.generated = (($attrs_changed | not) and $marked[.filename] and $marked[.previous_filename // .filename])
+            | any(.[] | .filename, .previous_filename // empty; test("(^|/)\\.gitattributes$")) as $gitattributes_changed
+            | map(.generated = (($gitattributes_changed | not) and $marked[.filename] and $marked[.previous_filename // .filename])
               | .new = (.filename | gsub("[\r\n]"; " "))
               | .old = (.previous_filename // .filename | gsub("[\r\n]"; " ")))' \
             "$files" >"$RUNNER_TEMP/pr-files-marked.json"
