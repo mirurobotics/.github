@@ -414,8 +414,9 @@ jobs:
             ./ai-review-context/pr.diff, then read each changed file in full
             in ./pr-head, not only the hunks. The diff leaves out the
             generated and vendored files listed in
-            ./ai-review-context/generated-files.txt. Don't read or review
-            those; review the source they come from instead. The PR's
+            ./ai-review-context/generated-files.txt. Don't review them or
+            report findings on them; open one only to check code that uses
+            it. The PR's
             title and description are in
             ./ai-review-context/pr-description.md. Follow the
             repo's CLAUDE.md or AGENTS.md if present, and read
