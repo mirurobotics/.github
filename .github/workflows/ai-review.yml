@@ -187,6 +187,8 @@ jobs:
 
       # Files marked linguist-generated or linguist-vendored, and the PR
       # diff without them, so reviewers spend their turns on source code.
+      # Built from the files API, since GitHub won't send the whole diff
+      # of a PR with more than 300 files.
       - name: Build diff without generated files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -195,18 +197,37 @@ jobs:
           set -euo pipefail
           dir="$GITHUB_WORKSPACE/ai-review-diff"
           mkdir -p "$dir"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' \
-            | tr '\n' '\0' \
+          files="$RUNNER_TEMP/pr-files.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+            | jq -s 'add // []' >"$files"
+          jq -j '.[] | .filename + "\u0000"' "$files" \
             | git -C base check-attr -z --stdin linguist-generated linguist-vendored \
-            | while IFS= read -r -d '' path && IFS= read -r -d '' _ && IFS= read -r -d '' value; do
-              case "$value" in set | true) printf '%s\n' "$path" ;; esac
-            done | sort -u >"$dir/generated-files.txt"
-          # --exclude takes globs, so escape glob characters in each path.
-          excludes=()
-          while IFS= read -r pattern; do
-            excludes+=(--exclude "$pattern")
-          done < <(sed 's/[][*?\\]/\\&/g' "$dir/generated-files.txt")
-          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "${excludes[@]}" >"$dir/pr.diff"
+              >"$RUNNER_TEMP/attrs"
+          # check-attr prints NUL-separated path, attribute, value triples.
+          # Paths are written one per line, so line breaks become spaces.
+          jq --rawfile attrs "$RUNNER_TEMP/attrs" '
+            ($attrs | split("\u0000")) as $a
+            | (reduce range(2; $a | length; 3) as $i ({};
+                if $a[$i] == "set" or $a[$i] == "true" then .[$a[$i - 2]] = true else . end)) as $marked
+            | map(.generated = ($marked[.filename] // false)
+              | .new = (.filename | gsub("[\r\n]"; " "))
+              | .old = (.previous_filename // .filename | gsub("[\r\n]"; " ")))' \
+            "$files" >"$RUNNER_TEMP/pr-files-marked.json"
+          jq -r '.[] | select(.generated) | .new' "$RUNNER_TEMP/pr-files-marked.json" \
+            >"$dir/generated-files.txt"
+          {
+            if [ "$(jq length "$files")" -ge 3000 ]; then
+              echo "GitHub lists at most 3000 files, so this diff may leave some out."
+            fi
+            jq -r '.[] | select(.generated | not)
+              | "diff --git a/\(.old) b/\(.new)\n"
+                + (if .status == "added" then "new file\n"
+                  elif .status == "removed" then "deleted file\n"
+                  elif .status == "renamed" then "rename from \(.old)\nrename to \(.new)\n"
+                  else "" end)
+                + (.patch // "(no patch from GitHub: binary, unchanged, or too large to diff)")' \
+              "$RUNNER_TEMP/pr-files-marked.json"
+          } >"$dir/pr.diff"
 
       - name: Upload diff
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
