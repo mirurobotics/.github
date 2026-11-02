@@ -49,10 +49,13 @@ test('renderThreads groups replies under the oldest thread first', () => {
   ].join(''))
 })
 
-test('renderConversation quotes each comment', () => {
+test('renderConversation quotes each comment, including a deleted account\'s', () => {
   assert.equal(
-    renderConversation([{ user: { login: 'bob' }, author_association: 'NONE', created_at: 't', body: 'x\ny' }]),
-    '## bob (NONE, t)\n\n> x\n> y\n\n'
+    renderConversation([
+      { user: { login: 'bob' }, author_association: 'NONE', created_at: 't', body: 'x\ny' },
+      { user: null, author_association: 'NONE', created_at: 'u', body: 'gone' }
+    ]),
+    '## bob (NONE, t)\n\n> x\n> y\n\n## null (NONE, u)\n\n> gone\n\n'
   )
 })
 

@@ -12,6 +12,9 @@ const NO_PATCH = '(no patch from GitHub: binary, only renamed or its mode change
 // Line breaks in paths become spaces, so a name can't fake a header.
 const oneLine = (s) => s.replace(/[\r\n]/g, ' ')
 
+// A deleted account's comments have no user; jq printed "null" for them.
+const login = (c) => c.user?.login ?? 'null'
+
 // Quotes untrusted text with "> " so it can't pass for the surrounding
 // structure.
 const quote = (body) => (body ? body.split('\n').map((l) => '> ' + l).join('\n') : '')
@@ -50,7 +53,7 @@ function renderThreads (comments, resolved) {
       else if (root.line) where = `:${root.line}`
       else where = `:${root.original_line} (outdated)`
       const state = resolved[String(root.id)] ? ' (resolved)' : ''
-      const replies = t.map((c) => `**${c.user.login}** (${c.author_association}, ${c.created_at}):\n\n${quote(c.body)}`)
+      const replies = t.map((c) => `**${login(c)}** (${c.author_association}, ${c.created_at}):\n\n${quote(c.body)}`)
       return `## ${oneLine(root.path)}${where}${state} at ${root.original_commit_id.slice(0, 7)}\n\n${replies.join('\n\n')}\n\n`
     })
     .join('')
@@ -59,7 +62,7 @@ function renderThreads (comments, resolved) {
 // The PR conversation (issue comments), oldest first.
 function renderConversation (comments) {
   return comments
-    .map((c) => `## ${c.user.login} (${c.author_association}, ${c.created_at})\n\n${quote(c.body)}\n\n`)
+    .map((c) => `## ${login(c)} (${c.author_association}, ${c.created_at})\n\n${quote(c.body)}\n\n`)
     .join('')
 }
 
@@ -67,7 +70,7 @@ function renderConversation (comments) {
 // last reviewed.
 function findSummary (comments, phase) {
   const prefix = summaryPrefix(phase)
-  const mine = comments.filter((c) => c.user.login === 'github-actions[bot]' && (c.body ?? '').startsWith(prefix))
+  const mine = comments.filter((c) => login(c) === 'github-actions[bot]' && (c.body ?? '').startsWith(prefix))
   const summary = mine[mine.length - 1]
   if (!summary) return { id: '', lastSha: '' }
   return { id: String(summary.id), lastSha: lastReviewedSha(summary.body ?? '') }
