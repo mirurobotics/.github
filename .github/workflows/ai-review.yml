@@ -239,11 +239,11 @@ jobs:
             compare="repos/$GITHUB_REPOSITORY/compare/$last_sha...$SHA"
             status=$(gh api "$compare?per_page=1" --jq .status || true)
             if [ "$status" = ahead ] || [ "$status" = identical ]; then
-              gh api -H "Accept: application/vnd.github.diff" "$compare" >"$dir/delta.diff" \
-                || rm -f "$dir/delta.diff"
+              gh api -H "Accept: application/vnd.github.diff" "$compare" >"$history/delta.diff" \
+                || rm -f "$history/delta.diff"
             fi
           fi
-          if [ -f "$dir/delta.diff" ]; then
+          if [ -f "$history/delta.diff" ]; then
             echo "Nits limited to changes since ${last_sha:0:7}"
           else
             echo "Nits may cover the whole PR"
@@ -478,7 +478,7 @@ jobs:
                problem, what goes wrong, and the fix. Post at most 3 nits.
                If no finding you keep is blocking, post at most 1 nit, and
                only a one-line fix that is clearly correct. If
-               ./ai-review-context/delta.diff exists, post nits only on
+               ./ai-review-history/delta.diff exists, post nits only on
                lines that both it and pr.diff change; blocking findings may
                be anywhere in the PR. A review-question nit names its
                question.
