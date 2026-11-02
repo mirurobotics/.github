@@ -1,7 +1,7 @@
 // The one summary comment each phase keeps on a PR: how collect finds it
 // and record writes it.
 
-const PREFIXES = { cleanup: '### AI review:', design: '### AI design review:' }
+const PREFIXES = { review: '### AI review:', design: '### AI design review:' }
 const SHA_MARKER = /<!-- ai-review sha=([0-9a-f]{40}) -->/g
 
 const summaryPrefix = (phase) => PREFIXES[phase]
