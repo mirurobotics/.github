@@ -1,5 +1,5 @@
 // Records a review round: the summary comment for both phases, and the
-// required commit status for the cleanup review.
+// commit status for the required review.
 
 const fs = require('fs')
 const path = require('path')
@@ -27,7 +27,7 @@ function designBody ({ sha, summary, url }) {
 function verdictBody ({ sha, verdict, summary, findings, url }) {
   const lines = findings.map((f) => `- \`${f.file}${f.line != null ? `:${f.line}` : ''}\`: ${f.description}`)
   const blocking = lines.length ? `**Blocking findings**\n\n${lines.join('\n')}\n\n` : ''
-  return `${summaryPrefix('cleanup')} ${verdict.replace('_', ' ')} for \`${sha.slice(0, 7)}\`\n\n${summary}\n\n${blocking}[Review run](${url})\n${shaMarker(sha)}`
+  return `${summaryPrefix('review')} ${verdict.replace('_', ' ')} for \`${sha.slice(0, 7)}\`\n\n${summary}\n\n${blocking}[Review run](${url})\n${shaMarker(sha)}`
 }
 
 async function setStatus (github, context, env, state, description) {

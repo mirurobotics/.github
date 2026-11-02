@@ -1,6 +1,7 @@
 // Collects what the review reads: the PR description and diff, earlier
 // review rounds, the summary comment to edit and the head it last
 // reviewed. Run here so Claude never gets a token that can post statuses.
+// Returns the PR's files and the delta (null when reviewing the whole PR).
 // Throws on any error: missing context would quietly weaken the review.
 
 const fs = require('fs')
@@ -131,7 +132,6 @@ async function collect ({ github, context, core, env = process.env }) {
   if (files.length < total) {
     throw new Error(`GitHub lists only ${files.length} of this PR's ${total} files, so it can't be reviewed. Split it into smaller PRs.`)
   }
-  fs.writeFileSync(path.join(env.RUNNER_TEMP, 'pr-files.json'), JSON.stringify(files))
   fs.writeFileSync(path.join(dir, 'pr.diff'), renderDiff(files))
 
   // Earlier rounds, kept apart from the reviewers' inputs.
@@ -146,7 +146,7 @@ async function collect ({ github, context, core, env = process.env }) {
 
   // Later review rounds review only the changes since the last reviewed
   // head. Design reviews always read the whole PR.
-  const delta = summary.lastSha && phase === 'cleanup'
+  const delta = summary.lastSha && phase === 'review'
     ? await deltaDiff(github, owner, repo, summary.lastSha, env.SHA)
     : null
   if (delta !== null) {
@@ -156,6 +156,7 @@ async function collect ({ github, context, core, env = process.env }) {
   } else {
     core.info('Reviewing the whole PR')
   }
+  return { files, delta }
 }
 
 module.exports = { collect, renderDiff, renderThreads, renderConversation, findSummary, quote }
