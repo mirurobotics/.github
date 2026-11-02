@@ -505,9 +505,10 @@ jobs:
                checking.
             3. Don't re-post a point an open thread already raises, even in
                other words, and drop points an earlier round settled.
-               Comments that start with "Design (" are advisory findings
-               from the draft's design review: never blocking, and not
-               yours to re-post. A nit
+               Comments by github-actions[bot] that start with "Design ("
+               are advisory findings from the draft's design review: don't
+               re-post them. A bug still in the code blocks even if one
+               raised it. A nit
                the PR author deferred or declined is settled even if its
                thread is still open. ./ai-review-history holds
                the inline threads (review-threads.md) and the PR
@@ -606,8 +607,11 @@ jobs:
                smallest its callers need?
                D10 Next change: how many places would the most likely next
                change touch?
-               Logic bugs, tests, error handling, security, docs, comments
-               and formatting are out of scope; the review after the PR is
+               Severity is high when the approach, the data model or an
+               interface should change, or a prerequisite PR should come
+               first, and medium for a structural change within the
+               approach. Logic bugs, tests, error handling, security, docs,
+               comments and formatting are out of scope; the review after the PR is
                marked ready covers them.
             2. The diff is in ./ai-review-context/pr.diff, the title and
                description in ./ai-review-context/pr-description.md, the PR
