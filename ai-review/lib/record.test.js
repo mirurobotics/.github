@@ -28,7 +28,7 @@ test('angleNames strips paths and extensions, then sorts and dedupes', () => {
 })
 
 // Runs record with a fake Octokit; angles are the angle files the run wrote.
-async function runRecord ({ phase = 'cleanup', result, angles = ['review'], commentId = '7', updateFails = false, action = 'synchronize' }) {
+async function runRecord ({ phase = 'cleanup', result, angles = ['review'], commentId = '7', updateFails = false }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'record-'))
   fs.mkdirSync(path.join(root, 'ai-review-context', 'angles'), { recursive: true })
   for (const a of angles) fs.writeFileSync(path.join(root, 'ai-review-context', 'angles', `${a}.md`), '')
@@ -37,14 +37,14 @@ async function runRecord ({ phase = 'cleanup', result, angles = ['review'], comm
   const github = {
     rest: {
       repos: { createCommitStatus: call('status') },
-      issues: { updateComment: call('update', updateFails), createComment: call('create'), removeLabel: call('removeLabel') }
+      issues: { updateComment: call('update', updateFails), createComment: call('create') }
     }
   }
   const failed = []
   const core = { setFailed: (m) => failed.push(m), warning: () => {} }
   const env = {
     PHASE: phase, SHA, PR_NUMBER: '5', STATUS_CONTEXT: 'ai-review', RESULT: typeof result === 'string' ? result : JSON.stringify(result),
-    COMMENT_ID: commentId, EVENT_ACTION: action, GITHUB_WORKSPACE: root,
+    COMMENT_ID: commentId, GITHUB_WORKSPACE: root,
     GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '1'
   }
   let error = null
@@ -96,11 +96,10 @@ test('a missing verdict, bad JSON or missing angle sets error', async () => {
   }
 })
 
-test('a design review posts its summary, sets no status and removes the label', async () => {
-  const { calls, error } = await runRecord({ phase: 'design', result: { summary: 'S' }, action: 'labeled' })
+test('a design review posts its summary and sets no status', async () => {
+  const { calls, error } = await runRecord({ phase: 'design', result: { summary: 'S' } })
   assert.equal(error, null)
-  assert.deepEqual(calls.map(([n]) => n), ['removeLabel', 'update'])
-  assert.equal(calls[0][1].name, 'ai-design-review')
+  assert.deepEqual(calls.map(([n]) => n), ['update'])
 })
 
 test('a design review with no summary fails without a status', async () => {
