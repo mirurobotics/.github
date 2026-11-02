@@ -8,8 +8,10 @@
 # Each push, one Claude session runs a read-only reviewer sub-agent per
 # angle in parallel, with more angles for larger PRs, then checks their
 # findings against the code, posts the ones that hold up and sets the
-# verdict. Each PR gets one summary comment, edited every round.
-# Generated files are reviewed and counted like any other file.
+# verdict. Each PR gets one summary comment, edited every round. It
+# records the head it reviewed, so later rounds post nits only on what
+# changed since. Generated files are reviewed and counted like any
+# other file.
 #
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
@@ -221,10 +223,31 @@ jobs:
           jq -r '.[] | "## \(.user.login) (\(.author_association), \(.created_at))\n\n"
             + ((.body // "") | split("\n") | map("> " + .) | join("\n")) + "\n"' \
             "$comments" >"$history/conversation.md"
-          # The one summary comment this workflow edits each round.
-          id=$(jq -r '[.[] | select(.user.login == "github-actions[bot]"
-            and ((.body // "") | startswith("### AI review:")))] | last | .id // ""' "$comments")
+          # The one summary comment this workflow edits each round, and the
+          # head it last reviewed. The last marker wins, since the model
+          # writes the text above it.
+          summary=$(jq -c '[.[] | select(.user.login == "github-actions[bot]"
+            and ((.body // "") | startswith("### AI review:")))] | last // {}' "$comments")
+          id=$(jq -r '.id // ""' <<<"$summary")
           echo "comment_id=$id" >>"$GITHUB_OUTPUT"
+          last_sha=$(jq -r '[(.body // "") | scan("<!-- ai-review sha=([0-9a-f]{40}) -->")] | last | .[0] // ""' <<<"$summary")
+
+          # Changes since the last reviewed head, where later rounds' nits
+          # go. After a force-push or rebase it isn't an ancestor, so there
+          # is no delta.diff and nits may cover the whole PR.
+          if [ -n "$last_sha" ]; then
+            compare="repos/$GITHUB_REPOSITORY/compare/$last_sha...$SHA"
+            status=$(gh api "$compare?per_page=1" --jq .status || true)
+            if [ "$status" = ahead ] || [ "$status" = identical ]; then
+              gh api -H "Accept: application/vnd.github.diff" "$compare" >"$dir/delta.diff" \
+                || rm -f "$dir/delta.diff"
+            fi
+          fi
+          if [ -f "$dir/delta.diff" ]; then
+            echo "Nits limited to changes since ${last_sha:0:7}"
+          else
+            echo "Nits may cover the whole PR"
+          fi
 
       # Each reviewer follows reviewer.md and one angle file. Correctness,
       # security and contracts always run; the rest join as the diff
@@ -257,6 +280,10 @@ jobs:
             root. Read the diff in ./ai-review-context/pr.diff, then open
             whatever you need in ./pr-head to judge each change. A file with
             no patch has a note instead; compare it yourself if it matters.
+          - If ./ai-review-context/delta.diff exists, it holds the changes
+            since the last reviewed commit. Blocking findings may be
+            anywhere in the PR, but report nits only on lines that both
+            delta.diff and pr.diff change.
           - The PR's title and description are in
             ./ai-review-context/pr-description.md. Don't open
             ./ai-review-history: earlier rounds are for the verifier, so you
@@ -282,10 +309,12 @@ jobs:
           - Severity is "blocking" for a finding that would make the merged
             code, test, workflow or skill do the wrong thing: a bug, a security
             issue, data loss, a test that passes against a broken
-            implementation, or an agent workflow that would stall or act
-            wrongly. That holds even if the code isn't wired up yet, the PR
+            implementation, or a skill or workflow that stalls or does the
+            wrong thing when an agent follows it as written on a realistic
+            input. That holds even if the code isn't wired up yet, the PR
             only changes docs or tests, or you can't run it. Everything else
-            is "nit".
+            is "nit", including wording a careful reader could misread and
+            a gap only an unusual agent would hit.
 
           Reply with only a JSON array of findings, or [] if you found none:
           [{"file": "path/to/file", "line": 42, "severity": "blocking", "description": "..."}]
@@ -433,8 +462,10 @@ jobs:
                findings that are wrong or that a linter, compiler or test run
                would catch, merge duplicates, and add problems you find while
                checking.
-            3. Don't re-post a point an open thread already raises, and drop
-               points an earlier round settled. ./ai-review-history holds
+            3. Don't re-post a point an open thread already raises, even in
+               other words, and drop points an earlier round settled. A nit
+               the PR author deferred or declined is settled even if its
+               thread is still open. ./ai-review-history holds
                the inline threads (review-threads.md) and the PR
                conversation (conversation.md); earlier
                summaries are comments by github-actions[bot] that start with
@@ -447,9 +478,13 @@ jobs:
                changed.
             4. Post each finding you keep as an inline comment that starts
                with "Blocking:" or "nit:", in at most 3 short sentences: the
-               problem, what goes wrong, and the fix. Post at most 5 nits,
-               the ones most likely to change the code. A review-question
-               nit names its question.
+               problem, what goes wrong, and the fix. Post at most 3 nits.
+               If no finding you keep is blocking, post at most 1 nit, and
+               only a one-line fix that is clearly correct. If
+               ./ai-review-context/delta.diff exists, post nits only on
+               lines that both it and pr.diff change; blocking findings may
+               be anywhere in the PR. A review-question nit names its
+               question.
             5. Set verdict to "request_changes" if any finding you keep is
                blocking under the severity rule in
                ./ai-review-context/reviewer.md, including a blocking point
@@ -522,7 +557,8 @@ jobs:
 
           $findings
           }
-          [Review run]($run_url)"
+          [Review run]($run_url)
+          <!-- ai-review sha=$SHA -->"
 
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
           if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
