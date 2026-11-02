@@ -2,3 +2,9 @@
 self-hosted-runner:
   labels:
     - ubuntu-latest-m
+paths:
+  .github/workflows/ai-review.yml:
+    ignore:
+      # GitHub sets job.workflow_* in called workflows; actionlint 1.7.12
+      # doesn't know them yet.
+      - 'property "workflow_(repository|sha)" is not defined'
