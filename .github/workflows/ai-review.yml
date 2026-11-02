@@ -4,11 +4,15 @@
 # that status as a required check so a PR cannot merge until Claude has
 # reviewed its latest commit and found no blocking issues.
 #
-# Draft PRs get a design review instead, on every push: one Claude
-# session asks the design-review skill's ten questions of the whole PR
-# and posts only new findings as advisory "Design (...)" comments, with
-# its own summary. It sets no status, since a draft can't merge, and its
-# threads never block. Marking the PR ready starts the review below.
+# Draft PRs get a design review instead, when the draft opens or
+# reopens, when a ready PR goes back to draft, and when someone adds the
+# `ai-design-review` label (removed again after the run, so it can be
+# re-added). Pushes to a draft run nothing, so an agent fixing design
+# comments can't loop on them. One Claude session asks the design-review
+# skill's ten questions of the whole PR and posts only new findings as
+# advisory "Design (...)" comments, with its own summary. It sets no
+# status, since a draft can't merge, and its threads never block.
+# Marking the PR ready starts the review below.
 #
 # Each push, one Claude session runs read-only reviewer sub-agents: one
 # for a small change, three in parallel (correctness, safety, quality)
@@ -28,7 +32,12 @@
 #
 #   on:
 #     pull_request_target:
-#       types: [opened, synchronize, reopened, ready_for_review]
+#       types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled]
+#   # Each label event gets its own group, so labeling a PR never cancels
+#   # its review.
+#   concurrency:
+#     group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.run_id || 'review' }}
+#     cancel-in-progress: true
 #   permissions:
 #     contents: read
 #     pull-requests: write
@@ -94,7 +103,15 @@ env:
   AGENTS_REF: 823712338d20adff57b39ab69ac35f09a47b2e37
 
 jobs:
+  # Ready PRs: every push. Drafts: only the events that ask for a design
+  # review. Other events, such as other labels, run nothing.
   review:
+    if: >-
+      ${{ (!github.event.pull_request.draft
+          && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action))
+        || (github.event.pull_request.draft
+          && (contains(fromJSON('["opened","reopened","converted_to_draft"]'), github.event.action)
+            || (github.event.action == 'labeled' && github.event.label.name == 'ai-design-review'))) }}
     timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
     env:
@@ -660,7 +677,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.design.outputs.structured_output }}
           COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
+          # Removing the label lets someone add it again for another run.
+          if [ "$EVENT_ACTION" = labeled ]; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/ai-design-review" >/dev/null \
+              || echo "::warning::Couldn't remove the ai-design-review label"
+          fi
           summary=$(jq -r '.summary // empty' <<<"${RESULT:-}" 2>/dev/null || true)
           if [ -z "$summary" ]; then
             echo "::error::Design review produced no summary"
@@ -670,7 +693,7 @@ jobs:
 
           $summary
 
-          Advisory: design comments don't block the PR. Mark it ready for the required review.
+          Advisory: design comments don't block the PR. Add the \`ai-design-review\` label for another design review, or mark the PR ready for the required review.
 
           [Review run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
           echo "$body" >>"$GITHUB_STEP_SUMMARY"
