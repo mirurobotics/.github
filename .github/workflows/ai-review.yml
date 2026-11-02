@@ -636,10 +636,10 @@ jobs:
             workspace root, if present, and ./miru-internal/AGENTS.md if it
             exists.
 
-            The summary is at most 5 sentences: the approach in one or two
-            and the sibling it follows, then only the open questions the
-            code and description can't answer. Don't restate the inline
-            comments.
+            The summary is at most 5 plain sentences with no heading: the
+            approach in one or two and the sibling it follows, then only
+            the open questions the code and description can't answer.
+            Don't restate the inline comments.
           claude_args: |
             --model ${{ inputs.model }}
             --effort ${{ inputs.effort }}
