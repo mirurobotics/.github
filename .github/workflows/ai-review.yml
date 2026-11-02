@@ -305,9 +305,9 @@ jobs:
           - Severity is "blocking" for a finding that would make the merged
             code, test, workflow or skill do the wrong thing: a bug, a security
             issue, data loss, a test that passes against a broken
-            implementation, or a skill or workflow that stalls or does the
-            wrong thing when an agent follows it as written on a realistic
-            input. That holds even if the code isn't wired up yet, the PR
+            implementation, or a skill, prompt or agent workflow that stalls
+            or does the wrong thing when an agent follows it as written on a
+            realistic input. That holds even if the code isn't wired up yet, the PR
             only changes docs or tests, or you can't run it. Everything else
             is "nit", including wording a careful reader could misread and
             a gap only an unusual agent would hit.
