@@ -4,11 +4,8 @@
 # that status as a required check so a PR cannot merge until Claude has
 # reviewed its latest commit and found no blocking issues.
 #
-# Draft PRs get a design review instead, when the draft opens or
-# reopens, when a ready PR goes back to draft, and when someone adds the
-# `ai-design-review` label (removed again after the run, so it can be
-# re-added). Pushes to a draft run nothing, so an agent fixing design
-# comments can't loop on them. One Claude session asks the design-review
+# Draft PRs get a design review instead, on every push and when a ready
+# PR goes back to draft. One Claude session asks the design-review
 # skill's ten questions of the whole PR and posts only new findings as
 # advisory "Design (...)" comments, with its own summary. It sets no
 # status, since a draft can't merge, and its threads never block.
@@ -32,12 +29,9 @@
 #
 #   on:
 #     pull_request_target:
-#       types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled]
-#   # Draft and label events each get their own group, so a push to a
-#   # draft or an unrelated label never cancels a running review. Only a
-#   # push to a ready PR replaces the review in progress.
+#       types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 #   concurrency:
-#     group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ (github.event.pull_request.draft || github.event.action == 'labeled') && github.run_id || 'review' }}
+#     group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
 #     cancel-in-progress: true
 #   permissions:
 #     contents: read
@@ -105,15 +99,10 @@ env:
   AGENTS_REF: 823712338d20adff57b39ab69ac35f09a47b2e37
 
 jobs:
-  # Ready PRs: every push. Drafts: only the events that ask for a design
-  # review. Other events, such as other labels, run nothing.
+  # Every push, plus switches between draft and ready. Callers must
+  # subscribe to only these: any other event cancels a running review.
   review:
-    if: >-
-      ${{ (!github.event.pull_request.draft
-          && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action))
-        || (github.event.pull_request.draft
-          && (contains(fromJSON('["opened","reopened","converted_to_draft"]'), github.event.action)
-            || (github.event.action == 'labeled' && github.event.label.name == 'ai-design-review'))) }}
+    if: contains(fromJSON('["opened","synchronize","reopened","ready_for_review","converted_to_draft"]'), github.event.action)
     timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
     env:
@@ -318,7 +307,6 @@ jobs:
         env:
           RESULT: ${{ steps.review.outputs.structured_output || steps.design.outputs.structured_output }}
           COMMENT_ID: ${{ steps.context.outputs.comment_id }}
-          EVENT_ACTION: ${{ github.event.action }}
         with:
           script: |
             await require(`${process.env.AI_REVIEW_LIB}/record.js`).record({ github, context, core })

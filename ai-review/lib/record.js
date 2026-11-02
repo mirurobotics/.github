@@ -5,8 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const { summaryPrefix, shaMarker } = require('./summary.js')
 
-const LABEL = 'ai-design-review'
-const DESIGN_FOOTER = 'Advisory: design comments don\'t block the PR. Add the `ai-design-review` label for another design review, or mark the PR ready for the required review.'
+const DESIGN_FOOTER = 'Advisory: design comments don\'t block the PR. Each push to the draft gets a new design review; mark the PR ready for the required review.'
 
 const runUrl = (env) => `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 
@@ -53,15 +52,7 @@ async function upsertSummary (github, context, env, body) {
 const pending = ({ github, context, env = process.env }) =>
   setStatus(github, context, env, 'pending', 'Claude is reviewing this commit')
 
-async function recordDesign ({ github, context, core, env }) {
-  // Removing the label lets someone add it again for another run.
-  if (env.EVENT_ACTION === 'labeled') {
-    try {
-      await github.rest.issues.removeLabel({ ...context.repo, issue_number: Number(env.PR_NUMBER), name: LABEL })
-    } catch {
-      core.warning(`Couldn't remove the ${LABEL} label`)
-    }
-  }
+async function recordDesign ({ github, context, env }) {
   const { summary } = parseResult(env.RESULT)
   if (!summary) throw new Error('Design review produced no summary')
   await upsertSummary(github, context, env, designBody({ sha: env.SHA, summary, url: runUrl(env) }))
@@ -87,7 +78,7 @@ async function recordVerdict ({ github, context, core, env }) {
 // Fail closed: any error, timeout, missing angle or missing verdict
 // leaves the required status non-green.
 async function record ({ github, context, core, env = process.env }) {
-  if (env.PHASE === 'design') return recordDesign({ github, context, core, env })
+  if (env.PHASE === 'design') return recordDesign({ github, context, env })
   try {
     await recordVerdict({ github, context, core, env })
   } catch (err) {
