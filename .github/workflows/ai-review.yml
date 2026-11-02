@@ -54,7 +54,7 @@
 #         AGENTS_READ_TOKEN: ${{ secrets.AGENTS_READ_TOKEN }}  # private repos
 #
 # Pin to a commit SHA so a change here reaches a repo only through a
-# reviewed PR that bumps it. The prompts in ai-review/prompts are read at
+# reviewed PR that bumps it. The prompts and scripts in ai-review/ are read at
 # that same commit.
 #
 # Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
@@ -121,17 +121,8 @@ jobs:
       SHA: ${{ github.event.pull_request.head.sha }}
       # design on drafts, cleanup (the required review) once ready.
       PHASE: ${{ github.event.pull_request.draft && 'design' || 'cleanup' }}
+      AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
     steps:
-      - name: Set status pending
-        if: env.PHASE == 'cleanup'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
-            -f state=pending -f context="$STATUS_CONTEXT" \
-            -f description="Claude is reviewing this commit" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
       # Base branch at the workspace root so Claude's config (CLAUDE.md,
       # .claude/) comes from trusted code; PR head in a subdirectory.
       - name: Checkout base
@@ -146,16 +137,24 @@ jobs:
           path: pr-head
           persist-credentials: false
 
-      # This workflow's prompts, at the commit the caller pinned. The github
-      # context names the caller's workflow; job names this one.
-      - name: Checkout AI review prompts
+      # This workflow's prompts and scripts, at the commit the caller
+      # pinned. The github context names the caller's workflow; job names
+      # this one.
+      - name: Checkout AI review prompts and scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: ai-review-src
-          sparse-checkout: ai-review/prompts
+          sparse-checkout: ai-review
           persist-credentials: false
+
+      - name: Set status pending
+        if: env.PHASE == 'cleanup'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await require(`${process.env.AI_REVIEW_LIB}/record.js`).pending({ github, context })
 
       # A missing or expired token fails the review, rather than quietly
       # reviewing without the skills.
@@ -180,116 +179,14 @@ jobs:
           persist-credentials: false
 
       # The description, the diff, earlier review rounds and the summary
-      # comment to edit. Fetched here so Claude never gets `gh api`, whose
-      # token can post statuses.
+      # comment to edit, from ai-review/lib/collect.js. Fetched here so
+      # Claude never gets a token that can post statuses.
       - name: Collect review context
         id: context
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TITLE: ${{ github.event.pull_request.title }}
-          BODY: ${{ github.event.pull_request.body }}
-        run: |
-          # Fail loudly: missing context would quietly weaken the review.
-          set -euo pipefail
-          dir="$GITHUB_WORKSPACE/ai-review-context"
-          mkdir -p "$dir"
-          printf '# %s\n\n%s\n' "$TITLE" "$BODY" >"$dir/pr-description.md"
-
-          # From the files API, since GitHub won't send the whole diff of a
-          # PR over 300 files. It lists at most 3000, so fail rather than
-          # pass a review that can't see them all.
-          files="$RUNNER_TEMP/pr-files.json"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
-            | jq -s 'add // []' >"$files"
-          listed=$(jq length "$files")
-          total=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .changed_files)
-          if [ "$listed" -lt "$total" ]; then
-            echo "::error::GitHub lists only $listed of this PR's $total files, so it can't be reviewed. Split it into smaller PRs."
-            exit 1
-          fi
-          # Line breaks in paths become spaces, so a name can't fake a header.
-          jq -r '.[] | (.filename | gsub("[\r\n]"; " ")) as $new
-            | (.previous_filename // .filename | gsub("[\r\n]"; " ")) as $old
-            | "diff --git a/\($old) b/\($new)\n"
-              + (if .status == "added" then "new file\n"
-                elif .status == "removed" then "deleted file\n"
-                elif .status == "renamed" then "rename from \($old)\nrename to \($new)\n"
-                else "" end)
-              + (.patch // "(no patch from GitHub: binary, only renamed or its mode changed, or too large to diff)")' \
-            "$files" >"$dir/pr.diff"
-
-          # Earlier threads, marked resolved per GraphQL, and the PR
-          # conversation, kept apart from the reviewers' inputs. Each body is
-          # quoted with "> " so it can't pass for the surrounding structure.
-          history="$GITHUB_WORKSPACE/ai-review-history"
-          mkdir -p "$history"
-          # shellcheck disable=SC2016 # $owner etc. are GraphQL variables
-          resolved=$(gh api graphql --paginate \
-            -f owner="${GITHUB_REPOSITORY%/*}" -f repo="${GITHUB_REPOSITORY#*/}" \
-            -F number="$PR_NUMBER" -f query='
-              query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $number) {
-                    reviewThreads(first: 100, after: $endCursor) {
-                      pageInfo { hasNextPage endCursor }
-                      nodes { isResolved comments(first: 1) { nodes { databaseId } } }
-                    }
-                  }
-                }
-              }' \
-            | jq -cs '[.[].data.repository.pullRequest.reviewThreads.nodes[]
-              | {key: (.comments.nodes[0].databaseId | tostring), value: .isResolved}]
-              | from_entries')
-          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
-            | jq -rs --argjson resolved "$resolved" 'add // []
-              | group_by(.in_reply_to_id // .id)
-              | map(sort_by(.created_at)) | sort_by(.[0].created_at) | .[]
-              | .[0] as $root
-              | "## \($root.path | gsub("[\r\n]"; " "))"
-                + (if $root.subject_type == "file" then " (file comment)"
-                   elif $root.line then ":\($root.line)"
-                   else ":\($root.original_line) (outdated)" end)
-                + (if $resolved[$root.id | tostring] then " (resolved)" else "" end)
-                + " at \($root.original_commit_id[0:7])\n\n"
-                + (map("**\(.user.login)** (\(.author_association), \(.created_at)):\n\n"
-                    + ((.body // "") | split("\n") | map("> " + .) | join("\n")))
-                  | join("\n\n"))
-                + "\n"' >"$history/review-threads.md"
-          comments="$RUNNER_TEMP/issue-comments.json"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            | jq -s 'add // []' >"$comments"
-          jq -r '.[] | "## \(.user.login) (\(.author_association), \(.created_at))\n\n"
-            + ((.body // "") | split("\n") | map("> " + .) | join("\n")) + "\n"' \
-            "$comments" >"$history/conversation.md"
-          # The one summary comment this phase edits each round, and the
-          # head it last reviewed. The last marker wins, since the model
-          # writes the text above it.
-          prefix="### AI review:"
-          if [ "$PHASE" = design ]; then prefix="### AI design review:"; fi
-          summary=$(jq -c --arg prefix "$prefix" '[.[] | select(.user.login == "github-actions[bot]"
-            and ((.body // "") | startswith($prefix)))] | last // {}' "$comments")
-          id=$(jq -r '.id // ""' <<<"$summary")
-          echo "comment_id=$id" >>"$GITHUB_OUTPUT"
-          last_sha=$(jq -r '[(.body // "") | scan("<!-- ai-review sha=([0-9a-f]{40}) -->")] | last | .[0] // ""' <<<"$summary")
-
-          # Changes since the last reviewed head, which later rounds review.
-          # After a force-push or rebase it isn't an ancestor, so there is no
-          # delta.diff and the whole PR is reviewed. Design reviews always
-          # read the whole PR.
-          if [ -n "$last_sha" ] && [ "$PHASE" = cleanup ]; then
-            compare="repos/$GITHUB_REPOSITORY/compare/$last_sha...$SHA"
-            status=$(gh api "$compare?per_page=1" --jq .status || true)
-            if [ "$status" = ahead ] || [ "$status" = identical ]; then
-              gh api -H "Accept: application/vnd.github.diff" "$compare" >"$history/delta.diff" \
-                || rm -f "$history/delta.diff"
-            fi
-          fi
-          if [ -f "$history/delta.diff" ]; then
-            cp "$history/delta.diff" "$dir/delta.diff"
-            echo "Reviewing changes since ${last_sha:0:7}"
-          else
-            echo "Reviewing the whole PR"
-          fi
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core })
 
       # Each reviewer follows reviewer.md and one angle file, which lists
       # the lenses it covers (reviewer.md and the lenses are in
@@ -354,7 +251,7 @@ jobs:
       # file edits, web access and Skill are denied too: --add-dir can load
       # the PR's commands under any skill's name, so reviewers read the
       # miru-internal skills as files. The timeout stays under the job's so
-      # Record verdict can still set an error status if the session hangs.
+      # Record can still set an error status if the session hangs.
       - name: Review
         id: review
         if: env.PHASE == 'cleanup'
@@ -413,91 +310,15 @@ jobs:
             --disallowedTools "Read(./.git/**),Read(//proc/**),Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Skill,Agent,Task"
             --json-schema '{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}'
 
-      # Drafts only: edits the one design summary comment. No status.
-      - name: Record design review
-        if: always() && env.PHASE == 'design'
+      # Edits the phase's summary comment and, for the required review,
+      # sets the status (ai-review/lib/record.js).
+      - name: Record
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ steps.design.outputs.structured_output }}
+          RESULT: ${{ steps.review.outputs.structured_output || steps.design.outputs.structured_output }}
           COMMENT_ID: ${{ steps.context.outputs.comment_id }}
           EVENT_ACTION: ${{ github.event.action }}
-        run: |
-          # Removing the label lets someone add it again for another run.
-          if [ "$EVENT_ACTION" = labeled ]; then
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/ai-design-review" >/dev/null \
-              || echo "::warning::Couldn't remove the ai-design-review label"
-          fi
-          summary=$(jq -r '.summary // empty' <<<"${RESULT:-}" 2>/dev/null || true)
-          if [ -z "$summary" ]; then
-            echo "::error::Design review produced no summary"
-            exit 1
-          fi
-          body="### AI design review: \`${SHA:0:7}\`
-
-          $summary
-
-          Advisory: design comments don't block the PR. Add the \`ai-design-review\` label for another design review, or mark the PR ready for the required review.
-
-          [Review run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-          echo "$body" >>"$GITHUB_STEP_SUMMARY"
-          if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
-            "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" \
-            -f body="$body" >/dev/null; then
-            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body" >/dev/null
-          fi
-
-      # Fail closed: any error, timeout, missing angle or missing verdict
-      # leaves the required status non-green.
-      - name: Record verdict
-        if: always() && env.PHASE == 'cleanup'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ steps.review.outputs.structured_output }}
-          COMMENT_ID: ${{ steps.context.outputs.comment_id }}
-        run: |
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          set_status() {
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
-              -f state="$1" -f context="$STATUS_CONTEXT" \
-              -f description="$2" -f target_url="$run_url" >/dev/null
-          }
-          fail() {
-            set_status error "Review did not complete; see the run log"
-            echo "::error::$1"
-            exit 1
-          }
-
-          verdict=$(jq -r '.verdict // empty' <<<"${RESULT:-}" 2>/dev/null || true)
-          case "$verdict" in
-          approve) state=success description="Approved by Claude" ;;
-          request_changes) state=failure description="Claude found blocking issues" ;;
-          *) fail "AI review produced no verdict" ;;
-          esac
-          want=$(printf '%s\n' ai-review-context/angles/*.md | jq -Rnr '[inputs | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")')
-          got=$(jq -r '[.angles[] | gsub("[\r\n]"; " ") | sub(".*/"; "") | rtrimstr(".md")] | unique | join(",")' <<<"$RESULT")
-          [ "$got" = "$want" ] || fail "Reviewers that replied ($got) don't match the angles run ($want)"
-
-          summary=$(jq -r '.summary' <<<"$RESULT")
-          findings=$(jq -r '.blocking_findings[]
-            | "- `\(.file)\(if .line then ":\(.line)" else "" end)`: \(.description)"' \
-            <<<"$RESULT")
-          # One summary comment per PR, edited each round.
-          body="### AI review: ${verdict/_/ } for \`${SHA:0:7}\`
-
-          $summary
-          ${findings:+
-          **Blocking findings**
-
-          $findings
-          }
-          [Review run]($run_url)
-          <!-- ai-review sha=$SHA -->"
-
-          echo "$body" >>"$GITHUB_STEP_SUMMARY"
-          if [ -z "$COMMENT_ID" ] || ! gh api -X PATCH \
-            "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" \
-            -f body="$body" >/dev/null; then
-            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body" >/dev/null
-          fi
-          set_status "$state" "$description"
-          [ "$state" = success ]
+        with:
+          script: |
+            await require(`${process.env.AI_REVIEW_LIB}/record.js`).record({ github, context, core })

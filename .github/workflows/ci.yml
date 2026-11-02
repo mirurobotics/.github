@@ -9,3 +9,22 @@ on:
 jobs:
   surface-lint:
     uses: ./.github/workflows/surface-lint.yml
+
+  ai-review-lib:
+    name: ai-review lib tests
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same Node major as actions/github-script, which runs the lib.
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Test
+        run: node --test 'ai-review/lib/*.test.js'
