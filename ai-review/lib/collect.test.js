@@ -67,9 +67,9 @@ test('findSummary takes the last bot summary of the phase and its last marker', 
     { id: 3, user: bot, body: `### AI review: new\n<!-- ai-review sha=${SHA_C} -->\n<!-- ai-review sha=${SHA_B} -->` },
     { id: 4, user: bot, body: '### AI design review: x' }
   ]
-  assert.deepEqual(findSummary(comments, 'cleanup'), { id: '3', lastSha: SHA_B })
+  assert.deepEqual(findSummary(comments, 'review'), { id: '3', lastSha: SHA_B })
   assert.deepEqual(findSummary(comments, 'design'), { id: '4', lastSha: '' })
-  assert.deepEqual(findSummary([], 'cleanup'), { id: '', lastSha: '' })
+  assert.deepEqual(findSummary([], 'review'), { id: '', lastSha: '' })
 })
 
 // A fake Octokit serving one PR. compare is { status, diff } or throws.
@@ -95,24 +95,24 @@ function fakeGithub ({ files, changedFiles = files.length, issueComments = [], c
   }
 }
 
-async function runCollect (opts, phase = 'cleanup') {
+async function runCollect (opts, phase = 'review') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collect-'))
   const outputs = {}
   const core = { setOutput: (k, v) => { outputs[k] = v }, info: () => {} }
   const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 5, title: 'T', body: null } } }
-  await collect({ github: fakeGithub(opts), context, core, env: { PHASE: phase, SHA: SHA_B, GITHUB_WORKSPACE: root, RUNNER_TEMP: root } })
+  const result = await collect({ github: fakeGithub(opts), context, core, env: { PHASE: phase, SHA: SHA_B, GITHUB_WORKSPACE: root } })
   const read = (p) => (fs.existsSync(path.join(root, p)) ? fs.readFileSync(path.join(root, p), 'utf8') : null)
-  return { outputs, read }
+  return { outputs, read, result }
 }
 
 const files = [{ filename: 'a', status: 'modified', patch: '+x', additions: 1, deletions: 0 }]
 const summary = [{ id: 9, user: { login: 'github-actions[bot]' }, body: `### AI review: approve\n<!-- ai-review sha=${SHA_A} -->` }]
 
 test('collect writes the description, diff and history', async () => {
-  const { outputs, read } = await runCollect({ files })
+  const { outputs, read, result } = await runCollect({ files })
   assert.equal(read('ai-review-context/pr-description.md'), '# T\n\n\n')
   assert.equal(read('ai-review-context/pr.diff'), 'diff --git a/a b/a\n+x\n')
-  assert.deepEqual(JSON.parse(read('pr-files.json')), files)
+  assert.deepEqual(result, { files, delta: null })
   assert.equal(read('ai-review-history/review-threads.md'), '')
   assert.equal(outputs.comment_id, '')
   assert.equal(read('ai-review-context/delta.diff'), null)
@@ -123,14 +123,15 @@ test('collect fails when GitHub lists fewer files than the PR changes', async ()
 })
 
 test('collect writes the delta since the last reviewed head', async () => {
-  const { outputs, read } = await runCollect({ files, issueComments: summary, compare: { status: 'ahead', diff: 'DELTA' } })
+  const { outputs, read, result } = await runCollect({ files, issueComments: summary, compare: { status: 'ahead', diff: 'DELTA' } })
   assert.equal(outputs.comment_id, '9')
+  assert.equal(result.delta, 'DELTA')
   assert.equal(read('ai-review-context/delta.diff'), 'DELTA')
   assert.equal(read('ai-review-history/delta.diff'), 'DELTA')
 })
 
 test('collect reviews the whole PR after a force-push, a failed compare, or in design', async () => {
-  for (const [compare, phase] of [[{ status: 'diverged' }, 'cleanup'], [new Error('404'), 'cleanup'], [{ status: 'ahead', diff: 'D' }, 'design']]) {
+  for (const [compare, phase] of [[{ status: 'diverged' }, 'review'], [new Error('404'), 'review'], [{ status: 'ahead', diff: 'D' }, 'design']]) {
     const { read } = await runCollect({ files, issueComments: summary, compare }, phase)
     assert.equal(read('ai-review-context/delta.diff'), null)
   }

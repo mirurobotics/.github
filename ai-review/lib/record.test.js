@@ -28,7 +28,7 @@ test('angleNames strips paths and extensions, then sorts and dedupes', () => {
 })
 
 // Runs record with a fake Octokit; angles are the angle files the run wrote.
-async function runRecord ({ phase = 'cleanup', result, angles = ['review'], commentId = '7', updateFails = false }) {
+async function runRecord ({ phase = 'review', result, angles = ['review'], commentId = '7', updateFails = false }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'record-'))
   fs.mkdirSync(path.join(root, 'ai-review-context', 'angles'), { recursive: true })
   for (const a of angles) fs.writeFileSync(path.join(root, 'ai-review-context', 'angles', `${a}.md`), '')
