@@ -1,5 +1,6 @@
-# Required AI review of every non-draft PR. Posts the `ai-review` status
-# checked by branch protection. See ai-review.yml for details.
+# Required AI review of every non-draft PR, and an advisory design review
+# of drafts. Posts the `ai-review` status checked by branch protection.
+# See ai-review.yml for details.
 #
 # pull_request_target runs this file, and the local reusable workflow it
 # calls, from the base branch, so a PR cannot edit or delete its own review.
@@ -8,10 +9,12 @@ name: AI Review
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled]
 
+# Draft and label events each get their own group, so they never cancel a
+# running review.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ (github.event.pull_request.draft || github.event.action == 'labeled') && github.run_id || 'review' }}
   cancel-in-progress: true
 
 permissions:
