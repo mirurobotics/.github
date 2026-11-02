@@ -75,5 +75,5 @@ test('plan writes no reviewers for a design review', () => {
   const { outputs, read } = runPlan('design', [file('a', 1)])
   assert.equal(outputs.claude_args, claudeArgs('design'))
   assert.equal(read('angles/review.md'), null)
-  assert.ok(!outputs.prompt.endsWith('\n'))
+  assert.equal(outputs.prompt, fs.readFileSync(path.join(__dirname, '..', 'prompts', 'design.md'), 'utf8').replace(/\n$/, ''))
 })
