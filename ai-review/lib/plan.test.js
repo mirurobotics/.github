@@ -7,6 +7,7 @@ const { plan, reviewers, hunkLines, claudeArgs, PHASES } = require('./plan.js')
 
 test('reviewers: up to 100 reviewed lines get one reviewer', () => {
   assert.deepEqual(reviewers({ total: 50, lines: 50, tests: false }), { review: ['correctness', 'contracts', 'security'] })
+  assert.deepEqual(reviewers({ total: 100, lines: 100, tests: false }), { review: ['correctness', 'contracts', 'security'] })
   assert.deepEqual(reviewers({ total: 50, lines: 50, tests: true }), { review: ['correctness', 'contracts', 'security', 'tests'] })
   // A small delta on a large PR keeps the large PR's lenses.
   assert.deepEqual(reviewers({ total: 500, lines: 20, tests: false }), {
