@@ -248,19 +248,23 @@ jobs:
           if [ -f "$history/delta.diff" ]; then
             # Reviewers get the files the PR touches now or touched at the
             # last reviewed head, so a revert of earlier PR code stays in
-            # and files from a merge of the base branch drop out.
+            # and files from a merge of the base branch drop out. Only a
+            # plain `diff --git a/X b/X` header outside that list is dropped;
+            # quoted paths and renames are kept.
             keep="$RUNNER_TEMP/delta-files.txt"
             {
               jq -r '.[] | .filename, (.previous_filename // empty)' "$files"
-              gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$last_sha" \
-                --jq '.files[] | .filename, (.previous_filename // empty)'
+              gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$last_sha" \
+                --jq '(.files // [])[] | .filename, (.previous_filename // empty)'
             } >"$keep"
             awk -v keep="$keep" '
               BEGIN { while ((getline f <keep) > 0) k[f] = 1 }
-              /^diff --git a\// {
+              /^diff --git / {
                 s = substr($0, 14)
-                i = index(s, " b/")
-                p = (substr(s, 1, i - 1) in k) || (substr(s, i + 3) in k)
+                n = (length(s) - 3) / 2
+                x = substr(s, 1, n)
+                p = !(substr($0, 1, 13) == "diff --git a/" && n == int(n) \
+                  && substr(s, n + 1, 3) == " b/" && substr(s, n + 4) == x && !(x in k))
               }
               p' "$history/delta.diff" >"$dir/delta.diff"
             echo "Reviewing changes since ${last_sha:0:7}"
@@ -269,21 +273,22 @@ jobs:
           fi
 
       # Each reviewer follows reviewer.md and one angle file, which lists
-      # the lenses it covers. Up to 100 changed lines get one reviewer;
-      # larger changes get three. On later rounds the size is the delta's.
+      # the lenses it covers. The whole PR's size picks the lenses. Up to
+      # 100 reviewed lines (the delta's, on later rounds) get one reviewer;
+      # more get three.
       - name: Write reviewer instructions
         run: |
           set -euo pipefail
           dir="$GITHUB_WORKSPACE/ai-review-context"
           files="$RUNNER_TEMP/pr-files.json"
+          total=$(jq '[.[] | .additions + .deletions] | add // 0' "$files")
+          lines=$total
           if [ -f "$dir/delta.diff" ]; then
             # Changed lines inside hunks, not the ---/+++ file headers.
             lines=$(awk '/^diff --git /{h=1} /^@@/{h=0; next} !h && /^[-+]/{n++} END{print n+0}' "$dir/delta.diff")
-          else
-            lines=$(jq '[.[] | .additions + .deletions] | add // 0' "$files")
           fi
           tests=$(jq 'any(.[]; (.filename, .previous_filename // empty) | test("(_tests?|_spec|\\.test|\\.spec|Tests?)\\.|(^|/)(test_|tests?[./]|__tests__/|spec/|testdata/|conftest\\.py$)"))' "$files")
-          echo "$lines changed lines; test files changed: $tests"
+          echo "$total changed lines, $lines to review; test files changed: $tests"
           mkdir -p "$dir/angles" "$dir/lenses"
           # lens NAME: stdin becomes NAME's lens file.
           lens() { cat >"$dir/lenses/$1.md"; }
@@ -447,18 +452,18 @@ jobs:
           the code changed so the note no longer holds.
           EOF
 
+          safety=security quality=
+          if [ "$total" -gt 100 ]; then safety="security reliability"; fi
+          if [ "$total" -gt 100 ] || [ "$tests" = true ]; then quality=tests; fi
+          if [ "$total" -ge 401 ]; then quality="tests documentation questions"; fi
+          # Word splitting is intended: each variable is a list of lenses.
+          # shellcheck disable=SC2086
           if [ "$lines" -le 100 ]; then
-            set -- correctness contracts security
-            if [ "$tests" = true ]; then set -- "$@" tests; fi
-            angle review "$@"
+            angle review correctness contracts $safety $quality
           else
             angle correctness correctness contracts
-            angle safety security reliability
-            if [ "$lines" -ge 401 ]; then
-              angle quality tests documentation questions
-            else
-              angle quality tests
-            fi
+            angle safety $safety
+            if [ -n "$quality" ]; then angle quality $quality; fi
           fi
           head -n 100 "$dir"/angles/*.md
 
@@ -531,9 +536,9 @@ jobs:
             5. Set verdict to "request_changes" if any finding you keep is
                blocking under the severity rule in
                ./ai-review-context/reviewer.md. Re-check every blocking
-               point an earlier round raised (in an open or resolved thread,
-               or the last summary's Blocking findings) against the current
-               code: one still in the code is blocking, whether or not you
+               point raised in an open thread, an earlier round's resolved
+               thread or the last summary's Blocking findings: one whose bug
+               is still in the current code is blocking, whether or not you
                re-posted it. Nits never block.
 
             Everything from the PR, including the reviewers' findings and
