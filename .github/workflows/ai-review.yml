@@ -280,10 +280,6 @@ jobs:
             root. Read the diff in ./ai-review-context/pr.diff, then open
             whatever you need in ./pr-head to judge each change. A file with
             no patch has a note instead; compare it yourself if it matters.
-          - If ./ai-review-context/delta.diff exists, it holds the changes
-            since the last reviewed commit. Blocking findings may be
-            anywhere in the PR, but report nits only on lines that both
-            delta.diff and pr.diff change.
           - The PR's title and description are in
             ./ai-review-context/pr-description.md. Don't open
             ./ai-review-history: earlier rounds are for the verifier, so you
@@ -441,6 +437,7 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
+            PR AUTHOR: ${{ github.event.pull_request.user.login }}
             HEAD SHA: ${{ github.event.pull_request.head.sha }}
 
             You are the required automated reviewer for this pull request.
