@@ -99,8 +99,8 @@ env:
   AGENTS_REF: 823712338d20adff57b39ab69ac35f09a47b2e37
 
 jobs:
-  # Every push, plus switches between draft and ready. Other events a
-  # caller subscribes to run nothing.
+  # Every push, plus switches between draft and ready. Callers must
+  # subscribe to only these: any other event cancels a running review.
   review:
     if: contains(fromJSON('["opened","synchronize","reopened","ready_for_review","converted_to_draft"]'), github.event.action)
     timeout-minutes: 90
