@@ -174,9 +174,12 @@ jobs:
       - name: Prepare review
         id: prepare
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Fetches the PR's merge base into pr-head for git diff.
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           script: |
-            const { files, delta } = await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core })
+            const { files, delta } = await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core, exec })
             require(`${process.env.AI_REVIEW_LIB}/plan.js`).plan({ core, files, delta })
 
       # Each phase's tools, turns and output schema are in plan.js. The

@@ -7,8 +7,7 @@
 const fs = require('fs')
 const path = require('path')
 const { summaryPrefix, lastReviewedSha } = require('./summary.js')
-
-const NO_PATCH = '(no patch from GitHub: binary, only renamed or its mode changed, or too large to diff)'
+const { gitClient, changes, fetchCommit } = require('./diff.js')
 
 // Line breaks in paths become spaces, so a name can't fake a header.
 const oneLine = (s) => s.replace(/[\r\n]/g, ' ')
@@ -19,20 +18,6 @@ const login = (c) => c.user?.login ?? 'null'
 // Quotes untrusted text with "> " so it can't pass for the surrounding
 // structure.
 const quote = (body) => (body ? body.split('\n').map((l) => '> ' + l).join('\n') : '')
-
-// A unified-diff-like file from the files API's per-file patches.
-function renderDiff (files) {
-  return files.map((f) => {
-    const now = oneLine(f.filename)
-    const old = oneLine(f.previous_filename ?? f.filename)
-    const status = {
-      added: 'new file\n',
-      removed: 'deleted file\n',
-      renamed: `rename from ${old}\nrename to ${now}\n`
-    }[f.status] ?? ''
-    return `diff --git a/${old} b/${now}\n${status}${f.patch ?? NO_PATCH}\n`
-  }).join('')
-}
 
 // Inline threads, oldest first, each marked outdated or resolved.
 // resolved maps a thread's first comment id to whether it's resolved.
@@ -99,22 +84,19 @@ async function resolvedThreads (github, owner, repo, number) {
 }
 
 // Changes from lastSha to sha, or null when lastSha isn't an ancestor
-// (after a force-push or rebase) or GitHub can't compare them.
-async function deltaDiff (github, owner, repo, lastSha, sha) {
-  const basehead = `${lastSha}...${sha}`
+// (after a force-push or rebase) or can't be fetched.
+async function deltaDiff ({ github, git, owner, repo, lastSha, sha, attrs }) {
   try {
-    const { data } = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead, per_page: 1 })
+    const { data } = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead: `${lastSha}...${sha}`, per_page: 1 })
     if (data.status !== 'ahead' && data.status !== 'identical') return null
-    const diff = await github.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
-      owner, repo, basehead, mediaType: { format: 'diff' }
-    })
-    return diff.data
+    await fetchCommit(git, lastSha)
+    return (await changes(git, { from: lastSha, to: sha, attrs })).diff
   } catch {
     return null
   }
 }
 
-async function collect ({ github, context, core, env = process.env }) {
+async function collect ({ github, context, core, exec, env = process.env, git }) {
   const { owner, repo } = context.repo
   const pr = context.payload.pull_request
   const phase = env.PHASE
@@ -124,15 +106,15 @@ async function collect ({ github, context, core, env = process.env }) {
   fs.mkdirSync(history, { recursive: true })
   fs.writeFileSync(path.join(dir, 'pr-description.md'), `# ${pr.title}\n\n${pr.body ?? ''}\n`)
 
-  // From the files API, since GitHub won't send the whole diff of a PR
-  // over 300 files. It lists at most 3000, so fail rather than pass a
-  // review that can't see them all.
-  const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 })
-  const { data: { changed_files: total } } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number })
-  if (files.length < total) {
-    throw new Error(`GitHub lists only ${files.length} of this PR's ${total} files, so it can't be reviewed. Split it into smaller PRs.`)
-  }
-  fs.writeFileSync(path.join(dir, 'pr.diff'), renderDiff(files))
+  // The PR's diff from the merge base GitHub uses for it, built with git
+  // in the PR head checkout.
+  git ??= gitClient({ exec, cwd: path.join(env.GITHUB_WORKSPACE, 'pr-head'), token: env.GITHUB_TOKEN })
+  const { data: { merge_base_commit: { sha: mergeBase } } } = await github.rest.repos.compareCommitsWithBasehead({
+    owner, repo, basehead: `${pr.base.sha}...${env.SHA}`, per_page: 1
+  })
+  await fetchCommit(git, mergeBase)
+  const { diff, files } = await changes(git, { from: mergeBase, to: env.SHA, attrs: mergeBase })
+  fs.writeFileSync(path.join(dir, 'pr.diff'), diff)
 
   // Earlier rounds, kept apart from the reviewers' inputs.
   const resolved = await resolvedThreads(github, owner, repo, pr.number)
@@ -147,7 +129,7 @@ async function collect ({ github, context, core, env = process.env }) {
   // Later review rounds review only the changes since the last reviewed
   // head. Design reviews always read the whole PR.
   const delta = summary.lastSha && phase === 'review'
-    ? await deltaDiff(github, owner, repo, summary.lastSha, env.SHA)
+    ? await deltaDiff({ github, git, owner, repo, lastSha: summary.lastSha, sha: env.SHA, attrs: mergeBase })
     : null
   if (delta !== null) {
     fs.writeFileSync(path.join(history, 'delta.diff'), delta)
@@ -159,4 +141,4 @@ async function collect ({ github, context, core, env = process.env }) {
   return { files, delta }
 }
 
-module.exports = { collect, renderDiff, renderThreads, renderConversation, findSummary, quote }
+module.exports = { collect, renderThreads, renderConversation, findSummary, quote }
