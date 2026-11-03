@@ -122,8 +122,9 @@ test('collect fails when git finds no merge base', async () => {
 })
 
 test('collect writes the delta since the last reviewed head', async () => {
-  const { outputs, read, result } = await runCollect({ issueComments: summary })
+  const { outputs, read, result, calls } = await runCollect({ issueComments: summary })
   const diff = `diff --git a/a b/a\n${SHA_A}..${SHA_B}\n`
+  assert.ok(calls.filter((args) => args[0] !== 'merge-base').every((args) => args[0] === `--attr-source=${MERGE_BASE}`))
   assert.equal(outputs.comment_id, '9')
   assert.deepEqual(result.delta, { diff, files })
   assert.equal(read('ai-review-context/delta.diff'), diff)
