@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { plan, reviewers, hunkLines, claudeArgs, PHASES } = require('./plan.js')
+const { plan, reviewers, claudeArgs, PHASES } = require('./plan.js')
 
 test('reviewers: up to 100 reviewed lines get one reviewer', () => {
   assert.deepEqual(reviewers({ total: 50, lines: 50, tests: false }), { review: ['correctness', 'contracts', 'security'] })
@@ -23,12 +23,6 @@ test('reviewers: more than 100 reviewed lines get three', () => {
   assert.deepEqual(reviewers({ total: 401, lines: 401, tests: false }).quality, ['tests', 'documentation', 'questions'])
   // A delta can outgrow the PR after a base merge; quality then has no lenses.
   assert.deepEqual(reviewers({ total: 80, lines: 150, tests: false }), { correctness: ['correctness', 'contracts'], safety: ['security'] })
-})
-
-test('hunkLines counts changed lines inside hunks only', () => {
-  const diff = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n ctx\ndiff --git a/y b/y\nnew file mode 100644\n--- /dev/null\n+++ b/y\n@@ -0,0 +1 @@\n+y\n'
-  assert.equal(hunkLines(diff), 3)
-  assert.equal(hunkLines(''), 0)
 })
 
 test('claudeArgs quotes each phase\'s JSON safely', () => {
@@ -66,7 +60,7 @@ test('plan writes the reviewers\' instructions for the required review', () => {
 })
 
 test('plan sizes later rounds by the delta and spots renamed test files', () => {
-  const delta = 'diff --git a/a b/a\n@@ -1 +1 @@\n' + '+x\n'.repeat(120)
+  const delta = { diff: '', files: [file('a', 100, { deletions: 20 })] }
   const { read } = runPlan('review', [file('src/b.go', 30, { previous_filename: 'tests/b.go' })], delta)
   assert.match(read('angles/correctness.md'), /correctness\.md\n- .*contracts\.md\n$/)
   assert.match(read('angles/quality.md'), /tests\.md\n$/)

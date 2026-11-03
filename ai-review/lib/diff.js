@@ -5,17 +5,10 @@
 const MAX_FILE_DIFF = 500 * 1024
 const TOO_LARGE = '(diff over 500 KB left out; compare the file yourself if it matters)\n'
 
-// Runs git in cwd, authenticated with token for fetches. The token goes
-// in the environment, never on the command line.
-function gitClient ({ exec, cwd, token }) {
-  const env = {
-    ...process.env,
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
-  }
+// Runs git in cwd and returns its output, throwing on a non-zero exit.
+function gitClient ({ exec, cwd }) {
   return async (args) => {
-    const out = await exec.getExecOutput('git', args, { cwd, env, silent: true, ignoreReturnCode: true })
+    const out = await exec.getExecOutput('git', args, { cwd, silent: true, ignoreReturnCode: true })
     if (out.exitCode !== 0) throw new Error(`git ${args.find((a) => !a.startsWith('-'))} failed: ${out.stderr.trim()}`)
     return out.stdout
   }
@@ -64,6 +57,6 @@ async function changes (git, { from, to, attrs }) {
   return { diff: capFileDiffs(diff), files }
 }
 
-const fetchCommit = (git, sha) => git(['fetch', '--no-tags', '--depth=1', 'origin', sha])
+const mergeBase = async (git, a, b) => (await git(['merge-base', a, b])).trim()
 
-module.exports = { gitClient, changes, fetchCommit, parseNumstat, capFileDiffs }
+module.exports = { gitClient, changes, mergeBase, parseNumstat, capFileDiffs }

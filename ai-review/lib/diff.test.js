@@ -4,7 +4,7 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { changes, parseNumstat, capFileDiffs } = require('./diff.js')
+const { changes, mergeBase, parseNumstat, capFileDiffs } = require('./diff.js')
 
 // A repo with a base commit and a head commit that touches every kind of
 // file change. Returns a git runner for it and both SHAs.
@@ -43,6 +43,7 @@ function repoWithChanges () {
 
 test('changes diffs every kind of file change with real headers', async () => {
   const { git, base, head } = await repoWithChanges()
+  assert.equal(await mergeBase(git, base, head), base)
   const { diff, files } = await changes(git, { from: base, to: head, attrs: base })
 
   assert.match(diff, /^diff --git a\/keep\.txt b\/keep\.txt\n.*\n--- a\/keep\.txt\n\+\+\+ b\/keep\.txt\n@@ .* @@\n a\n-b\n\+B\n/m)

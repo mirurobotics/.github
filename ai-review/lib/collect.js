@@ -1,13 +1,14 @@
 // Collects what the review reads: the PR description and diff, earlier
 // review rounds, the summary comment to edit and the head it last
 // reviewed. Run here so Claude never gets a token that can post statuses.
-// Returns the PR's files and the delta (null when reviewing the whole PR).
+// Returns the PR's files and the delta's diff and files (null when
+// reviewing the whole PR).
 // Throws on any error: missing context would quietly weaken the review.
 
 const fs = require('fs')
 const path = require('path')
 const { summaryPrefix, lastReviewedSha } = require('./summary.js')
-const { gitClient, changes, fetchCommit } = require('./diff.js')
+const { gitClient, changes, mergeBase } = require('./diff.js')
 
 // Line breaks in paths become spaces, so a name can't fake a header.
 const oneLine = (s) => s.replace(/[\r\n]/g, ' ')
@@ -84,13 +85,11 @@ async function resolvedThreads (github, owner, repo, number) {
 }
 
 // Changes from lastSha to sha, or null when lastSha isn't an ancestor
-// (after a force-push or rebase) or can't be fetched.
-async function deltaDiff ({ github, git, owner, repo, lastSha, sha, attrs }) {
+// (after a force-push or rebase) or isn't in the clone.
+async function deltaChanges (git, { lastSha, sha, attrs }) {
   try {
-    const { data } = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead: `${lastSha}...${sha}`, per_page: 1 })
-    if (data.status !== 'ahead' && data.status !== 'identical') return null
-    await fetchCommit(git, lastSha)
-    return (await changes(git, { from: lastSha, to: sha, attrs })).diff
+    await git(['merge-base', '--is-ancestor', lastSha, sha])
+    return await changes(git, { from: lastSha, to: sha, attrs })
   } catch {
     return null
   }
@@ -106,14 +105,11 @@ async function collect ({ github, context, core, exec, env = process.env, git })
   fs.mkdirSync(history, { recursive: true })
   fs.writeFileSync(path.join(dir, 'pr-description.md'), `# ${pr.title}\n\n${pr.body ?? ''}\n`)
 
-  // The PR's diff from the merge base GitHub uses for it, built with git
-  // in the PR head checkout.
-  git ??= gitClient({ exec, cwd: path.join(env.GITHUB_WORKSPACE, 'pr-head'), token: env.GITHUB_TOKEN })
-  const { data: { merge_base_commit: { sha: mergeBase } } } = await github.rest.repos.compareCommitsWithBasehead({
-    owner, repo, basehead: `${pr.base.sha}...${env.SHA}`, per_page: 1
-  })
-  await fetchCommit(git, mergeBase)
-  const { diff, files } = await changes(git, { from: mergeBase, to: env.SHA, attrs: mergeBase })
+  // The PR's diff from its merge base, built with git in the PR head
+  // checkout, which has the full history.
+  git ??= gitClient({ exec, cwd: path.join(env.GITHUB_WORKSPACE, 'pr-head') })
+  const base = await mergeBase(git, pr.base.sha, env.SHA)
+  const { diff, files } = await changes(git, { from: base, to: env.SHA, attrs: base })
   fs.writeFileSync(path.join(dir, 'pr.diff'), diff)
 
   // Earlier rounds, kept apart from the reviewers' inputs.
@@ -129,11 +125,11 @@ async function collect ({ github, context, core, exec, env = process.env, git })
   // Later review rounds review only the changes since the last reviewed
   // head. Design reviews always read the whole PR.
   const delta = summary.lastSha && phase === 'review'
-    ? await deltaDiff({ github, git, owner, repo, lastSha: summary.lastSha, sha: env.SHA, attrs: mergeBase })
+    ? await deltaChanges(git, { lastSha: summary.lastSha, sha: env.SHA, attrs: base })
     : null
   if (delta !== null) {
-    fs.writeFileSync(path.join(history, 'delta.diff'), delta)
-    fs.writeFileSync(path.join(dir, 'delta.diff'), delta)
+    fs.writeFileSync(path.join(history, 'delta.diff'), delta.diff)
+    fs.writeFileSync(path.join(dir, 'delta.diff'), delta.diff)
     core.info(`Reviewing changes since ${summary.lastSha.slice(0, 7)}`)
   } else {
     core.info('Reviewing the whole PR')
