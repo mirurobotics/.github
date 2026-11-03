@@ -3,31 +3,18 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { collect, renderDiff, renderThreads, renderConversation, findSummary, quote } = require('./collect.js')
+const { collect, renderThreads, renderConversation, findSummary, quote } = require('./collect.js')
 
 const SHA_A = 'a'.repeat(40)
 const SHA_B = 'b'.repeat(40)
 const SHA_C = 'c'.repeat(40)
+const BASE = 'd'.repeat(40)
+const MERGE_BASE = 'e'.repeat(40)
 
 test('quote prefixes every line and leaves an empty body empty', () => {
   assert.equal(quote('one\ntwo'), '> one\n> two')
   assert.equal(quote(''), '')
   assert.equal(quote(null), '')
-})
-
-test('renderDiff writes a header per file and notes missing patches', () => {
-  const diff = renderDiff([
-    { filename: 'new.txt', status: 'added', patch: '@@ -0,0 +1 @@\n+hi' },
-    { filename: 'gone.txt', status: 'removed', patch: '@@ -1 +0,0 @@\n-bye' },
-    { filename: 'b.txt', previous_filename: 'a.txt', status: 'renamed' },
-    { filename: 'evil\ndiff --git a/x b/x', status: 'modified', patch: '' }
-  ])
-  assert.equal(diff, [
-    'diff --git a/new.txt b/new.txt\nnew file\n@@ -0,0 +1 @@\n+hi\n',
-    'diff --git a/gone.txt b/gone.txt\ndeleted file\n@@ -1 +0,0 @@\n-bye\n',
-    'diff --git a/a.txt b/b.txt\nrename from a.txt\nrename to b.txt\n(no patch from GitHub: binary, only renamed or its mode changed, or too large to diff)\n',
-    'diff --git a/evil diff --git a/x b/x b/evil diff --git a/x b/x\n\n'
-  ].join(''))
 })
 
 const comment = (over) => ({
@@ -72,67 +59,82 @@ test('findSummary takes the last bot summary of the phase and its last marker', 
   assert.deepEqual(findSummary([], 'review'), { id: '', lastSha: '' })
 })
 
-// A fake Octokit serving one PR. compare is { status, diff } or throws.
-function fakeGithub ({ files, changedFiles = files.length, issueComments = [], compare }) {
-  const calls = []
-  const route = (name) => (args) => { calls.push([name, args]); return name }
-  const lists = { listFiles: files, listReviewComments: [], listComments: issueComments }
+// A fake Octokit serving one PR's comments.
+function fakeGithub ({ issueComments = [] }) {
+  const route = (name) => () => name
+  const lists = { listReviewComments: [], listComments: issueComments }
   return {
-    calls,
-    rest: {
-      pulls: { listFiles: route('listFiles'), listReviewComments: route('listReviewComments'), get: async () => ({ data: { changed_files: changedFiles } }) },
-      issues: { listComments: route('listComments') },
-      repos: {
-        compareCommitsWithBasehead: async () => {
-          if (compare instanceof Error) throw compare
-          return { data: { status: compare.status } }
-        }
-      }
-    },
+    rest: { pulls: { listReviewComments: route('listReviewComments') }, issues: { listComments: route('listComments') } },
     paginate: async (fn, args) => lists[fn(args)],
-    graphql: async () => ({ repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } }),
-    request: async () => ({ data: compare.diff })
+    graphql: async () => ({ repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } })
   }
 }
 
-async function runCollect (opts, phase = 'review') {
+// A fake git over a clone where BASE and SHA_B meet at MERGE_BASE and
+// SHA_A is an ancestor of SHA_B unless notAncestor. Diffs name their
+// endpoints.
+function fakeGit ({ noMergeBase = false, notAncestor = false } = {}) {
+  const calls = []
+  const git = async (args) => {
+    calls.push(args)
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      if (notAncestor) throw new Error('git merge-base failed')
+      return ''
+    }
+    if (args[0] === 'merge-base') {
+      if (noMergeBase) throw new Error('git merge-base failed: no merge base')
+      return MERGE_BASE + '\n'
+    }
+    const [from, to] = args.slice(-2)
+    return args.includes('--numstat') ? '1\t0\ta\0' : `diff --git a/a b/a\n${from}..${to}\n`
+  }
+  return { git, calls }
+}
+
+async function runCollect ({ phase = 'review', issueComments, ...gitOpts } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collect-'))
   const outputs = {}
   const core = { setOutput: (k, v) => { outputs[k] = v }, info: () => {} }
-  const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 5, title: 'T', body: null } } }
-  const result = await collect({ github: fakeGithub(opts), context, core, env: { PHASE: phase, SHA: SHA_B, GITHUB_WORKSPACE: root } })
+  const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 5, title: 'T', body: null, base: { sha: BASE } } } }
+  const { git, calls } = fakeGit(gitOpts)
+  const result = await collect({ github: fakeGithub({ issueComments }), context, core, git, env: { PHASE: phase, SHA: SHA_B, GITHUB_WORKSPACE: root } })
   const read = (p) => (fs.existsSync(path.join(root, p)) ? fs.readFileSync(path.join(root, p), 'utf8') : null)
-  return { outputs, read, result }
+  return { outputs, read, result, calls }
 }
 
-const files = [{ filename: 'a', status: 'modified', patch: '+x', additions: 1, deletions: 0 }]
 const summary = [{ id: 9, user: { login: 'github-actions[bot]' }, body: `### AI review: approve\n<!-- ai-review sha=${SHA_A} -->` }]
+const files = [{ filename: 'a', additions: 1, deletions: 0 }]
 
-test('collect writes the description, diff and history', async () => {
-  const { outputs, read, result } = await runCollect({ files })
+test('collect diffs the PR from its merge base, with the base\'s attributes', async () => {
+  const { outputs, read, result, calls } = await runCollect()
   assert.equal(read('ai-review-context/pr-description.md'), '# T\n\n\n')
-  assert.equal(read('ai-review-context/pr.diff'), 'diff --git a/a b/a\n+x\n')
+  assert.equal(read('ai-review-context/pr.diff'), `diff --git a/a b/a\n${MERGE_BASE}..${SHA_B}\n`)
   assert.deepEqual(result, { files, delta: null })
+  assert.deepEqual(calls[0], ['merge-base', BASE, SHA_B])
+  assert.ok(calls.slice(1).every((args) => args[0] === `--attr-source=${MERGE_BASE}`))
   assert.equal(read('ai-review-history/review-threads.md'), '')
   assert.equal(outputs.comment_id, '')
   assert.equal(read('ai-review-context/delta.diff'), null)
 })
 
-test('collect fails when GitHub lists fewer files than the PR changes', async () => {
-  await assert.rejects(runCollect({ files, changedFiles: 2 }), /lists only 1 of this PR's 2 files/)
+test('collect fails when git finds no merge base', async () => {
+  await assert.rejects(runCollect({ noMergeBase: true }), /no merge base/)
 })
 
 test('collect writes the delta since the last reviewed head', async () => {
-  const { outputs, read, result } = await runCollect({ files, issueComments: summary, compare: { status: 'ahead', diff: 'DELTA' } })
+  const { outputs, read, result, calls } = await runCollect({ issueComments: summary })
+  const diff = `diff --git a/a b/a\n${SHA_A}..${SHA_B}\n`
+  assert.ok(calls.filter((args) => args[0] !== 'merge-base').every((args) => args[0] === `--attr-source=${MERGE_BASE}`))
   assert.equal(outputs.comment_id, '9')
-  assert.equal(result.delta, 'DELTA')
-  assert.equal(read('ai-review-context/delta.diff'), 'DELTA')
-  assert.equal(read('ai-review-history/delta.diff'), 'DELTA')
+  assert.deepEqual(result.delta, { diff, files })
+  assert.equal(read('ai-review-context/delta.diff'), diff)
+  assert.equal(read('ai-review-history/delta.diff'), diff)
 })
 
-test('collect reviews the whole PR after a force-push, a failed compare, or in design', async () => {
-  for (const [compare, phase] of [[{ status: 'diverged' }, 'review'], [new Error('404'), 'review'], [{ status: 'ahead', diff: 'D' }, 'design']]) {
-    const { read } = await runCollect({ files, issueComments: summary, compare }, phase)
+test('collect reviews the whole PR after a force-push or in design', async () => {
+  for (const opts of [{ notAncestor: true }, { phase: 'design' }]) {
+    const { read, result } = await runCollect({ issueComments: summary, ...opts })
+    assert.equal(result.delta, null, JSON.stringify(opts))
     assert.equal(read('ai-review-context/delta.diff'), null)
   }
 })

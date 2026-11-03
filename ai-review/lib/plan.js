@@ -57,18 +57,6 @@ const PHASES = {
 
 const TEST_FILE = /(_tests?|_spec|\.test|\.spec|Tests?)\.|(^|\/)(test_|tests?[./]|__tests__\/|spec\/|testdata\/|conftest\.py$)/
 
-// Changed lines inside a diff's hunks, not its ---/+++ file headers.
-function hunkLines (diff) {
-  let header = false
-  let n = 0
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('diff --git ')) header = true
-    if (line.startsWith('@@')) { header = false; continue }
-    if (!header && (line.startsWith('-') || line.startsWith('+'))) n++
-  }
-  return n
-}
-
 // Reviewer name -> lenses. The whole PR's size picks the lenses. Up to
 // 100 reviewed lines (the delta's, on later rounds) get one reviewer;
 // more get three.
@@ -114,8 +102,9 @@ function plan ({ core, files, delta, env = process.env }) {
   core.setOutput('claude_args', claudeArgs(phase))
   if (phase !== 'review') return
 
-  const total = files.reduce((n, f) => n + f.additions + f.deletions, 0)
-  const lines = delta === null ? total : hunkLines(delta)
+  const changed = (list) => list.reduce((n, f) => n + f.additions + f.deletions, 0)
+  const total = changed(files)
+  const lines = delta === null ? total : changed(delta.files)
   const tests = files.some((f) => [f.filename, f.previous_filename].some((name) => name && TEST_FILE.test(name)))
   core.info(`${total} changed lines, ${lines} to review; test files changed: ${tests}`)
   const chosen = reviewers({ total, lines, tests })
@@ -123,4 +112,4 @@ function plan ({ core, files, delta, env = process.env }) {
   core.info(JSON.stringify(chosen))
 }
 
-module.exports = { plan, reviewers, hunkLines, claudeArgs, PHASES }
+module.exports = { plan, reviewers, claudeArgs, PHASES }

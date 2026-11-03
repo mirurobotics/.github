@@ -119,11 +119,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Full history, so collect.js can find the merge base and the last
+      # reviewed head with git.
       - name: Checkout PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: pr-head
+          fetch-depth: 0
           persist-credentials: false
 
       # This workflow's prompts and scripts, at the commit the caller
@@ -176,7 +179,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const { files, delta } = await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core })
+            const { files, delta } = await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core, exec })
             require(`${process.env.AI_REVIEW_LIB}/plan.js`).plan({ core, files, delta })
 
       # Each phase's tools, turns and output schema are in plan.js. The
