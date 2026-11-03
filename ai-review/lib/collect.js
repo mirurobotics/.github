@@ -8,7 +8,7 @@
 const fs = require('fs')
 const path = require('path')
 const { summaryPrefix, lastReviewedSha } = require('./summary.js')
-const { gitClient, changes, mergeBase } = require('./diff.js')
+const { gitClient, changes, mergeBase, isAncestor } = require('./diff.js')
 
 // Line breaks in paths become spaces, so a name can't fake a header.
 const oneLine = (s) => s.replace(/[\r\n]/g, ' ')
@@ -84,17 +84,6 @@ async function resolvedThreads (github, owner, repo, number) {
   return resolved
 }
 
-// Changes from lastSha to sha, or null when lastSha isn't an ancestor
-// (after a force-push or rebase) or isn't in the clone.
-async function deltaChanges (git, { lastSha, sha, attrs }) {
-  try {
-    await git(['merge-base', '--is-ancestor', lastSha, sha])
-    return await changes(git, { from: lastSha, to: sha, attrs })
-  } catch {
-    return null
-  }
-}
-
 async function collect ({ github, context, core, exec, env = process.env, git }) {
   const { owner, repo } = context.repo
   const pr = context.payload.pull_request
@@ -123,9 +112,11 @@ async function collect ({ github, context, core, exec, env = process.env, git })
   core.setOutput('comment_id', summary.id)
 
   // Later review rounds review only the changes since the last reviewed
-  // head. Design reviews always read the whole PR.
+  // head. After a force-push or rebase it isn't an ancestor, so the whole
+  // PR is reviewed. Design reviews always read the whole PR.
   const delta = summary.lastSha && phase === 'review'
-    ? await deltaChanges(git, { lastSha: summary.lastSha, sha: env.SHA, attrs: base })
+    && await isAncestor(git, summary.lastSha, env.SHA)
+    ? await changes(git, { from: summary.lastSha, to: env.SHA, attrs: base })
     : null
   if (delta !== null) {
     fs.writeFileSync(path.join(history, 'delta.diff'), delta.diff)

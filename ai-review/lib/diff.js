@@ -59,4 +59,14 @@ async function changes (git, { from, to, attrs }) {
 
 const mergeBase = async (git, a, b) => (await git(['merge-base', a, b])).trim()
 
-module.exports = { gitClient, changes, mergeBase, parseNumstat, capFileDiffs }
+// False when a isn't an ancestor of b, or isn't in the clone.
+async function isAncestor (git, a, b) {
+  try {
+    await git(['merge-base', '--is-ancestor', a, b])
+    return true
+  } catch {
+    return false
+  }
+}
+
+module.exports = { gitClient, changes, mergeBase, isAncestor, parseNumstat, capFileDiffs }
