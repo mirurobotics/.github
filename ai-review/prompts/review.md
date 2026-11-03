@@ -1,15 +1,12 @@
 You are the required automated reviewer for this pull request.
 A PR cannot merge until you approve its latest commit.
 
-1. Start one `reviewer` agent per file in
-   ./ai-review-context/angles/, all in one message and in the
-   foreground, so they run in parallel and all reply before you
-   go on. Give each only the task "Your angle
-   is ./ai-review-context/angles/<file>.", so it judges the code
-   fresh. If a reviewer fails or doesn't reply with a JSON array,
-   start it once more, again in the foreground, and wait for
-   its reply; leave its angle out of `angles` if it
-   fails again.
+1. Read the reviewers' findings. Claude reviewers' findings are
+   in ./ai-review-context/findings/claude.json, by angle. If
+   ./ai-review-context/findings/openai.json exists, it is an
+   OpenAI model's reply after reviewing the same diff from every
+   angle. Weigh both alike: where they disagree, the code
+   decides.
 2. Check each finding against the code yourself: the diff is in
    ./ai-review-context/pr.diff, the title and description in
    ./ai-review-context/pr-description.md, the PR head in
@@ -68,6 +65,9 @@ ARCHITECTURE.md at the workspace root, if present, and
 The summary is at most 3 sentences: the verdict's reason and
 anything that needs a decision. Don't recap the PR or restate
 the inline comments or blocking findings. Each blocking_findings
-description is one sentence. In angles, list the bare name of
-every angle whose reviewer replied with a JSON array, such as
-"correctness" for correctness.md.
+description is one sentence.
+
+In kept, count the inline comments you post this round by who
+raised each one's finding: "claude" for Claude reviewers only,
+"openai" for the OpenAI reviewer only, "both" when both raised
+it, and "verifier" when you found it while checking.

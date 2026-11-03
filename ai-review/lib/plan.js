@@ -1,21 +1,38 @@
-// Plans a review round: the phase's prompt and Claude arguments and, for
-// the required review, which reviewers run and which lenses each covers.
+// Plans a review round: the session's prompt and Claude arguments and,
+// for the required review, which reviewers run and which lenses each
+// covers. Then hands the reviewer jobs' findings to the final session.
 
 const fs = require('fs')
 const path = require('path')
 
 const PROMPTS = path.join(__dirname, '..', 'prompts')
 
-// What differs between the phases. Both deny ./.git (the action writes
-// github.token into its config), /proc (the session's own key), Bash,
-// file edits and web access. Skill is denied because --add-dir can load
-// the PR's commands under any skill's name, so reviewers read the
+// One finding, as reviewer.md asks reviewers to reply.
+const FINDING = {
+  type: 'object',
+  properties: {
+    file: { type: 'string' },
+    line: { type: 'integer' },
+    severity: { type: 'string', enum: ['blocking', 'nit'] },
+    description: { type: 'string' }
+  },
+  required: ['file', 'severity', 'description']
+}
+
+const COUNT = { type: 'integer', minimum: 0 }
+
+// What differs between the Claude sessions. All deny ./.git (the action
+// writes github.token into its config), /proc (the session's own key),
+// Bash, file edits and web access. Skill is denied because --add-dir can
+// load the PR's commands under any skill's name, so reviewers read the
 // miru-internal skills as files.
-const PHASES = {
-  // The required review: a coordinator with read-only reviewer agents.
-  review: {
-    prompt: 'review.md',
-    maxTurns: 150,
+const DENIED = 'Read(./.git/**),Read(//proc/**),Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Skill'
+const SESSIONS = {
+  // The required review's reviewer job: read-only reviewer agents, whose
+  // findings it returns without judging them.
+  reviewers: {
+    prompt: 'reviewers.md',
+    maxTurns: 50,
     agents: {
       reviewer: {
         description: 'Reviews the PR from one angle and replies with its findings as JSON. Posts nothing.',
@@ -25,8 +42,30 @@ const PHASES = {
         maxTurns: 100
       }
     },
-    allowedTools: 'Read,Grep,Glob,Agent,Task,mcp__github_inline_comment__create_inline_comment',
-    disallowedTools: 'Read(./.git/**),Read(//proc/**),Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Skill',
+    allowedTools: 'Read,Grep,Glob,Agent,Task',
+    disallowedTools: DENIED,
+    schema: {
+      type: 'object',
+      properties: {
+        reviews: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { angle: { type: 'string' }, findings: { type: 'array', items: FINDING } },
+            required: ['angle', 'findings']
+          }
+        }
+      },
+      required: ['reviews']
+    }
+  },
+  // The required review's verdict: checks the reviewer jobs' findings and
+  // posts the ones that hold up.
+  review: {
+    prompt: 'review.md',
+    maxTurns: 150,
+    allowedTools: 'Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment',
+    disallowedTools: `${DENIED},Agent,Task`,
     schema: {
       type: 'object',
       properties: {
@@ -40,9 +79,14 @@ const PHASES = {
             required: ['file', 'description']
           }
         },
-        angles: { type: 'array', items: { type: 'string' } }
+        // The inline comments posted this round, by who raised each one.
+        kept: {
+          type: 'object',
+          properties: { claude: COUNT, openai: COUNT, both: COUNT, verifier: COUNT },
+          required: ['claude', 'openai', 'both', 'verifier']
+        }
       },
-      required: ['verdict', 'summary', 'blocking_findings', 'angles']
+      required: ['verdict', 'summary', 'blocking_findings', 'kept']
     }
   },
   // Drafts: one session, no sub-agents, posting its own comments.
@@ -50,7 +94,7 @@ const PHASES = {
     prompt: 'design.md',
     maxTurns: 100,
     allowedTools: 'Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment',
-    disallowedTools: 'Read(./.git/**),Read(//proc/**),Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Skill,Agent,Task',
+    disallowedTools: `${DENIED},Agent,Task`,
     schema: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] }
   }
 }
@@ -74,9 +118,9 @@ function reviewers ({ total, lines, tests }) {
   return { correctness: ['correctness', 'contracts'], safety, ...(quality.length ? { quality } : {}), design }
 }
 
-// The phase's arguments that claude_args adds to the shared ones.
-function claudeArgs (phase) {
-  const p = PHASES[phase]
+// The session's arguments that claude_args adds to the shared ones.
+function claudeArgs (session) {
+  const p = SESSIONS[session]
   return [
     `--max-turns ${p.maxTurns}`,
     ...(p.agents ? [`--agents '${JSON.stringify(p.agents)}'`] : []),
@@ -97,16 +141,17 @@ function writeReviewers (dir, plan) {
   }
 }
 
-// Sets the prompt and claude_args outputs, copies the lenses, which
-// both phases read, and, for the required review, writes the
-// reviewers' instructions. files and delta come from collect.
+// Sets the prompt and claude_args outputs for the session (the phase's
+// own unless SESSION names another), copies the lenses, which both
+// phases read, and, for the required review, writes the reviewers'
+// instructions. files and delta come from collect.
 function plan ({ core, files, delta, env = process.env }) {
-  const phase = env.PHASE
+  const session = env.SESSION || env.PHASE
   const dir = path.join(env.GITHUB_WORKSPACE, 'ai-review-context')
-  core.setOutput('prompt', fs.readFileSync(path.join(PROMPTS, PHASES[phase].prompt), 'utf8').replace(/\n$/, ''))
-  core.setOutput('claude_args', claudeArgs(phase))
+  core.setOutput('prompt', fs.readFileSync(path.join(PROMPTS, SESSIONS[session].prompt), 'utf8').replace(/\n$/, ''))
+  core.setOutput('claude_args', claudeArgs(session))
   fs.cpSync(path.join(PROMPTS, 'lenses'), path.join(dir, 'lenses'), { recursive: true })
-  if (phase !== 'review') return
+  if (env.PHASE !== 'review') return
 
   const changed = (list) => list.filter((f) => !PLAN_FILE.test(f.filename)).reduce((n, f) => n + f.additions + f.deletions, 0)
   const total = changed(files)
@@ -118,4 +163,24 @@ function plan ({ core, files, delta, env = process.env }) {
   core.info(JSON.stringify(chosen))
 }
 
-module.exports = { plan, reviewers, claudeArgs, PHASES }
+// Bare angle names, sorted and deduplicated, from files or replies.
+const angleNames = (names) => [...new Set(names.map((n) => n.replace(/[\r\n]/g, ' ').replace(/.*\//, '').replace(/\.md$/, '')))].sort()
+
+// Writes the reviewer jobs' findings for the final session. Fails closed
+// if any Claude reviewer's angle is missing; the OpenAI reviewer is
+// optional.
+function addFindings ({ env = process.env }) {
+  const dir = path.join(env.GITHUB_WORKSPACE, 'ai-review-context')
+  let reviews
+  try {
+    ({ reviews } = JSON.parse(env.CLAUDE_FINDINGS))
+  } catch {}
+  const want = angleNames(fs.readdirSync(path.join(dir, 'angles')).filter((f) => f.endsWith('.md'))).join(',')
+  const got = angleNames(Array.isArray(reviews) ? reviews.map((r) => String(r.angle)) : []).join(',')
+  if (!want || got !== want) throw new Error(`Reviewers that replied (${got}) don't match the angles run (${want})`)
+  fs.mkdirSync(path.join(dir, 'findings'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'findings', 'claude.json'), JSON.stringify(reviews, null, 2) + '\n')
+  if (env.OPENAI_FINDINGS) fs.writeFileSync(path.join(dir, 'findings', 'openai.json'), env.OPENAI_FINDINGS + '\n')
+}
+
+module.exports = { plan, reviewers, claudeArgs, addFindings, angleNames, SESSIONS }
