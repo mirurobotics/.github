@@ -57,17 +57,21 @@ const PHASES = {
 
 const TEST_FILE = /(_tests?|_spec|\.test|\.spec|Tests?)\.|(^|\/)(test_|tests?[./]|__tests__\/|spec\/|testdata\/|conftest\.py$)/
 
+// The author's working notes, which don't count toward the PR's size.
+const PLAN_FILE = /^plans\//
+
 // Reviewer name -> lenses. The whole PR's size picks the lenses. Up to
 // 100 reviewed lines (the delta's, on later rounds) get one reviewer;
-// more get three.
+// more get three. A design reviewer always runs too.
 function reviewers ({ total, lines, tests }) {
   let safety = ['security']
   let quality = []
   if (total > 100) safety = ['security', 'reliability']
   if (total > 100 || tests) quality = ['tests']
   if (total >= 401) quality = ['tests', 'documentation', 'questions']
-  if (lines <= 100) return { review: ['correctness', 'contracts', ...safety, ...quality] }
-  return { correctness: ['correctness', 'contracts'], safety, ...(quality.length ? { quality } : {}) }
+  const design = ['design']
+  if (lines <= 100) return { review: ['correctness', 'contracts', ...safety, ...quality], design }
+  return { correctness: ['correctness', 'contracts'], safety, ...(quality.length ? { quality } : {}), design }
 }
 
 // The phase's arguments that claude_args adds to the shared ones.
@@ -82,33 +86,35 @@ function claudeArgs (phase) {
   ].join('\n')
 }
 
-// Copies reviewer.md and the lenses for the reviewers, and writes each
-// reviewer's angle file listing its lenses.
+// Copies reviewer.md for the reviewers, and writes each reviewer's
+// angle file listing its lenses.
 function writeReviewers (dir, plan) {
   fs.mkdirSync(path.join(dir, 'angles'), { recursive: true })
   fs.cpSync(path.join(PROMPTS, 'reviewer.md'), path.join(dir, 'reviewer.md'))
-  fs.cpSync(path.join(PROMPTS, 'lenses'), path.join(dir, 'lenses'), { recursive: true })
   for (const [name, lenses] of Object.entries(plan)) {
     const list = lenses.map((l) => `- ./ai-review-context/lenses/${l}.md\n`).join('')
     fs.writeFileSync(path.join(dir, 'angles', `${name}.md`), `Your angle covers these lenses. Read each file and review from all of them:\n${list}`)
   }
 }
 
-// Sets the prompt and claude_args outputs and, for the required review,
-// writes the reviewers' instructions. files and delta come from collect.
+// Sets the prompt and claude_args outputs, copies the lenses, which
+// both phases read, and, for the required review, writes the
+// reviewers' instructions. files and delta come from collect.
 function plan ({ core, files, delta, env = process.env }) {
   const phase = env.PHASE
+  const dir = path.join(env.GITHUB_WORKSPACE, 'ai-review-context')
   core.setOutput('prompt', fs.readFileSync(path.join(PROMPTS, PHASES[phase].prompt), 'utf8').replace(/\n$/, ''))
   core.setOutput('claude_args', claudeArgs(phase))
+  fs.cpSync(path.join(PROMPTS, 'lenses'), path.join(dir, 'lenses'), { recursive: true })
   if (phase !== 'review') return
 
-  const changed = (list) => list.reduce((n, f) => n + f.additions + f.deletions, 0)
+  const changed = (list) => list.filter((f) => !PLAN_FILE.test(f.filename)).reduce((n, f) => n + f.additions + f.deletions, 0)
   const total = changed(files)
   const lines = delta === null ? total : changed(delta.files)
   const tests = files.some((f) => [f.filename, f.previous_filename].some((name) => name && TEST_FILE.test(name)))
   core.info(`${total} changed lines, ${lines} to review; test files changed: ${tests}`)
   const chosen = reviewers({ total, lines, tests })
-  writeReviewers(path.join(env.GITHUB_WORKSPACE, 'ai-review-context'), chosen)
+  writeReviewers(dir, chosen)
   core.info(JSON.stringify(chosen))
 }
 

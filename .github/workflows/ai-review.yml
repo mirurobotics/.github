@@ -4,16 +4,17 @@
 # that status as a required check so a PR cannot merge until Claude has
 # reviewed its latest commit and found no blocking issues.
 #
-# Every push, draft or ready, also gets a design review. One Claude
-# session asks the design-review skill's ten questions of the whole PR
-# and posts only new findings as advisory "Design (...)" comments, with
-# its own summary. It sets no status and its threads never block.
-# Drafts get only the design review; marking the PR ready adds the
-# required review below, which runs alongside it.
+# Draft PRs get a design review instead, on every push and when a ready
+# PR goes back to draft. One Claude session asks the design-review
+# skill's ten questions of the whole PR and posts only new findings as
+# advisory "Design (...)" comments, with its own summary. It sets no
+# status, since a draft can't merge, and its threads never block.
+# Marking the PR ready starts the review below, where they can block.
 #
-# Each push to a ready PR, one Claude session runs read-only reviewer
-# sub-agents: one for a small change, three in parallel (correctness,
-# safety, quality) for a larger one. It then checks their findings
+# Each push, one Claude session runs read-only reviewer sub-agents: one
+# for a small change, three in parallel (correctness, safety, quality)
+# for a larger one, and a design reviewer whose high-severity findings
+# block. It then checks their findings
 # against the code, posts the ones that hold up and sets the verdict.
 # Each PR gets one summary comment, edited every round. It records the
 # head it reviewed, so later rounds review and post nits only on what
@@ -105,16 +106,11 @@ jobs:
     if: contains(fromJSON('["opened","synchronize","reopened","ready_for_review","converted_to_draft"]'), github.event.action)
     timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
-    strategy:
-      # A failed design review must not cancel the required one.
-      fail-fast: false
-      matrix:
-        # design on every PR, plus the required review once ready.
-        phase: ${{ fromJSON(github.event.pull_request.draft && '["design"]' || '["design","review"]') }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       SHA: ${{ github.event.pull_request.head.sha }}
-      PHASE: ${{ matrix.phase }}
+      # design on drafts, the required review once ready.
+      PHASE: ${{ github.event.pull_request.draft && 'design' || 'review' }}
       AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
     steps:
       # Base branch at the workspace root so Claude's config (CLAUDE.md,

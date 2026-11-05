@@ -1,5 +1,5 @@
 # Required AI review of every non-draft PR, and an advisory design review
-# of every PR. Posts the `ai-review` status checked by branch protection.
+# of drafts. Posts the `ai-review` status checked by branch protection.
 # See ai-review.yml for details.
 #
 # pull_request_target runs this file, and the local reusable workflow it

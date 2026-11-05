@@ -14,6 +14,8 @@ checked in the code.
   they call or affect. Changes to files pr.diff doesn't list came
   from merging the base branch, unless they undo an earlier change
   in this PR.
+- Files under plans/ are the author's working notes: read them
+  for the PR's intent, but report nothing on them.
 - The PR's title and description are in
   ./ai-review-context/pr-description.md. Don't open
   ./ai-review-history: earlier rounds are for the verifier, so you
@@ -44,7 +46,8 @@ checked in the code.
   realistic input. That holds even if the code isn't wired up yet, the PR
   only changes docs or tests, or you can't run it. Everything else
   is "nit", including wording a careful reader could misread and
-  a gap only an unusual agent would hit.
+  a gap only an unusual agent would hit. The design lens sets
+  its own severity.
 
 Reply with only a JSON array of findings, or [] if you found none:
 [{"file": "path/to/file", "line": 42, "severity": "blocking", "description": "..."}]

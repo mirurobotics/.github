@@ -5,7 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const { summaryPrefix, shaMarker } = require('./summary.js')
 
-const DESIGN_FOOTER = 'Advisory: design comments don\'t block the PR. Each push gets a new design review; the required review runs once the PR is ready.'
+const DESIGN_FOOTER = 'Advisory: design comments don\'t block a draft. Each push to the draft gets a new design review; once the PR is ready, the required review blocks on high-severity design findings.'
 
 const runUrl = (env) => `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 

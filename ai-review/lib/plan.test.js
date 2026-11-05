@@ -5,24 +5,26 @@ const os = require('os')
 const path = require('path')
 const { plan, reviewers, claudeArgs, PHASES } = require('./plan.js')
 
-test('reviewers: up to 100 reviewed lines get one reviewer', () => {
-  assert.deepEqual(reviewers({ total: 50, lines: 50, tests: false }), { review: ['correctness', 'contracts', 'security'] })
-  assert.deepEqual(reviewers({ total: 100, lines: 100, tests: false }), { review: ['correctness', 'contracts', 'security'] })
-  assert.deepEqual(reviewers({ total: 50, lines: 50, tests: true }), { review: ['correctness', 'contracts', 'security', 'tests'] })
+const design = ['design']
+
+test('reviewers: up to 100 reviewed lines get one reviewer, plus design', () => {
+  assert.deepEqual(reviewers({ total: 50, lines: 50, tests: false }), { review: ['correctness', 'contracts', 'security'], design })
+  assert.deepEqual(reviewers({ total: 100, lines: 100, tests: false }), { review: ['correctness', 'contracts', 'security'], design })
+  assert.deepEqual(reviewers({ total: 50, lines: 50, tests: true }), { review: ['correctness', 'contracts', 'security', 'tests'], design })
   // A small delta on a large PR keeps the large PR's lenses.
   assert.deepEqual(reviewers({ total: 500, lines: 20, tests: false }), {
-    review: ['correctness', 'contracts', 'security', 'reliability', 'tests', 'documentation', 'questions']
+    review: ['correctness', 'contracts', 'security', 'reliability', 'tests', 'documentation', 'questions'], design
   })
 })
 
-test('reviewers: more than 100 reviewed lines get three', () => {
+test('reviewers: more than 100 reviewed lines get three, plus design', () => {
   assert.deepEqual(reviewers({ total: 150, lines: 150, tests: false }), {
-    correctness: ['correctness', 'contracts'], safety: ['security', 'reliability'], quality: ['tests']
+    correctness: ['correctness', 'contracts'], safety: ['security', 'reliability'], quality: ['tests'], design
   })
   assert.deepEqual(reviewers({ total: 400, lines: 400, tests: false }).quality, ['tests'])
   assert.deepEqual(reviewers({ total: 401, lines: 401, tests: false }).quality, ['tests', 'documentation', 'questions'])
   // A delta can outgrow the PR after a base merge; quality then has no lenses.
-  assert.deepEqual(reviewers({ total: 80, lines: 150, tests: false }), { correctness: ['correctness', 'contracts'], safety: ['security'] })
+  assert.deepEqual(reviewers({ total: 80, lines: 150, tests: false }), { correctness: ['correctness', 'contracts'], safety: ['security'], design })
 })
 
 test('claudeArgs quotes each phase\'s JSON safely', () => {
@@ -57,6 +59,13 @@ test('plan writes the reviewers\' instructions for the required review', () => {
   ].join('\n') + '\n')
   assert.ok(read('reviewer.md'))
   assert.ok(read('lenses/questions.md'))
+  assert.match(read('angles/design.md'), /lenses\/design\.md\n$/)
+})
+
+test('plan leaves plans out of the PR\'s size', () => {
+  const { read } = runPlan('review', [file('src/a.go', 50), file('plans/active/20261105-a.md', 300)])
+  assert.equal(read('angles/correctness.md'), null)
+  assert.match(read('angles/review.md'), /security\.md\n$/)
 })
 
 test('plan sizes later rounds by the delta and spots renamed test files', () => {
@@ -70,5 +79,6 @@ test('plan writes no reviewers for a design review', () => {
   const { outputs, read } = runPlan('design', [file('a', 1)])
   assert.equal(outputs.claude_args, claudeArgs('design'))
   assert.equal(read('angles/review.md'), null)
+  assert.ok(read('lenses/design.md'))
   assert.equal(outputs.prompt, fs.readFileSync(path.join(__dirname, '..', 'prompts', 'design.md'), 'utf8').replace(/\n$/, ''))
 })
