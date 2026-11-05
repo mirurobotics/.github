@@ -20,7 +20,7 @@ A PR cannot merge until you approve its latest commit.
 3. Don't re-post a point an open thread already raises, even in
    other words, and drop points an earlier round settled.
    Comments by github-actions[bot] that start with "Design ("
-   are advisory findings from the draft's design review: don't
+   are advisory findings from the design review: don't
    re-post them. A bug still in the code blocks even if one
    raised it. A nit
    the PR author deferred or declined is settled even if its
