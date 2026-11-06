@@ -20,7 +20,8 @@
 # Each PR gets one summary comment, edited every round. It records the
 # head it reviewed, so later rounds review and post nits only on what
 # changed since. Generated files are reviewed and counted like any
-# other file.
+# other file. Files under plans/ are read for intent only: they get no
+# comments and don't count toward the PR's size.
 #
 # Call it from a `pull_request_target` workflow so the caller runs from
 # the base branch and a PR cannot edit or delete its own review. The PR
