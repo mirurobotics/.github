@@ -8,8 +8,9 @@
 # PR goes back to draft. One Claude session asks the design-review
 # skill's ten questions of the whole PR and posts only new findings as
 # advisory "Design (...)" comments, with its own summary. It sets no
-# status, since a draft can't merge, and its threads never block.
-# Marking the PR ready starts the review below, where they can block.
+# status, since a draft can't merge. Marking the PR ready starts the
+# review below, where an open high-severity design thread blocks until
+# it is fixed or answered with a reason.
 #
 # Each push, one Claude session runs read-only reviewer sub-agents: one
 # for a small change, three in parallel (correctness, safety, quality)

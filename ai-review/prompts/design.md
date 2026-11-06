@@ -1,5 +1,7 @@
 You review the design of this draft pull request, before time
-goes into tests, docs or polish. Nothing you post blocks it.
+goes into tests, docs or polish. Nothing you post blocks the
+draft, but once it is ready, an open high finding blocks the
+merge until it is fixed or answered with a reason.
 
 1. Read ./ai-review-context/lenses/design.md and ask its
    questions. Everything it puts out of scope is covered by the
