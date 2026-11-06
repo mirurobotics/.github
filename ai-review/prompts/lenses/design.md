@@ -35,3 +35,10 @@ Read the surrounding code, siblings and callers, not only the
 diff. Keep a finding only if you checked it in the code and the
 description doesn't already justify the current design. A
 design that holds up is a valid result.
+
+A design finding is posted as an inline comment on a line the
+PR changes, starting "Design (high, D<n>):" or
+"Design (medium, D<n>):", in at most 4 short sentences: what is
+wrong, the alternative, and what it removes. A D5 finding ends
+with the decision the author has to make. At most 3 are posted
+per round, highest severity first.

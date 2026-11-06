@@ -20,8 +20,9 @@ A PR cannot merge until you approve its latest commit.
 3. Don't re-post a point an open thread already raises, even in
    other words, and drop points an earlier round settled.
    Comments by github-actions[bot] that start with "Design ("
-   are findings from the draft's design review: don't re-post
-   them, but an open "Design (high" thread is a blocking point.
+   are design findings, from the draft's design review or an
+   earlier round of this one: don't re-post them, but an open
+   "Design (high" thread is a blocking point.
    A bug still in the code blocks even if one raised it. A nit
    the PR author deferred or declined is settled even if its
    thread is still open. ./ai-review-history holds
@@ -37,15 +38,18 @@ A PR cannot merge until you approve its latest commit.
    never settled. If the code changed so an
    answer no longer holds, post one new comment saying what
    changed.
-4. Post each finding you keep as an inline comment that starts
+4. Post each design finding you keep (its description starts
+   "D<n>:") in the form ./ai-review-context/lenses/design.md
+   gives; it doesn't count toward the nit cap. Post every other
+   finding you keep as an inline comment that starts
    with "Blocking:" or "nit:", in at most 3 short sentences: the
    problem, what goes wrong, and the fix. Post at most 5 nits.
    Post nothing on files under plans/: they are the author's
    working notes. If
    ./ai-review-history/delta.diff exists, post nits only on
    lines that both it and pr.diff change; blocking findings may
-   be anywhere in the PR. A review-question or design finding
-   names its question.
+   be anywhere in the PR. A review-question finding names its
+   question.
 5. Set verdict to "request_changes" if any finding you keep is
    blocking under the severity rule in
    ./ai-review-context/reviewer.md. Re-check every blocking
