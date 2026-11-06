@@ -2,8 +2,7 @@ You review the design of this draft pull request, before time
 goes into tests, docs or polish. Nothing you post blocks it.
 
 1. Read ./ai-review-context/lenses/design.md and ask its
-   questions. Its last paragraph is for reviewer agents; skip
-   it. Everything it puts out of scope is covered by the
+   questions. Everything it puts out of scope is covered by the
    required review once the PR is marked ready.
 2. The diff is in ./ai-review-context/pr.diff, the title and
    description in ./ai-review-context/pr-description.md, the PR

@@ -35,8 +35,3 @@ Read the surrounding code, siblings and callers, not only the
 diff. Keep a finding only if you checked it in the code and the
 description doesn't already justify the current design. A
 design that holds up is a valid result.
-
-As a reviewer agent, report a high finding as "blocking" and a
-medium one as "nit", and start its description with "D<n>:". If
-./ai-review-context/delta.diff exists, report only design
-problems its changes introduce or make worse.
