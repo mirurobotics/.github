@@ -14,8 +14,8 @@ inputs:
   environment:
     description: production, staging or uat. Leave empty for a release.
     default: ''
-  deployment-link:
-    description: Where the deployed change lives, such as the release page or the docs site. Shown only on success.
+  link:
+    description: Where the change lives, such as the website, package or release page. Shown only on success.
     default: ''
   results:
     description: >-
@@ -33,7 +33,7 @@ runs:
         APPLICATION: ${{ inputs.application }}
         VERSION: ${{ inputs.version }}
         ENVIRONMENT: ${{ inputs.environment }}
-        DEPLOYMENT_LINK: ${{ inputs.deployment-link }}
+        LINK: ${{ inputs.link }}
         RESULTS: ${{ inputs.results }}
         ACTOR: ${{ github.triggering_actor }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -66,18 +66,18 @@ runs:
             done
             ;;
         esac
-        # A failed change may not have published what the deployment link points to.
-        [ "$status" = Success ] || DEPLOYMENT_LINK=
+        # A failed change may not have published what the link points to.
+        [ "$status" = Success ] || LINK=
         # Slack link syntax can't be escaped, so drop a URL containing its delimiters rather than lose the post.
         url_pattern='^https?://[^[:space:]|<>]+$'
-        if [ -n "$DEPLOYMENT_LINK" ] && ! [[ $DEPLOYMENT_LINK =~ $url_pattern ]]; then
-          echo "::warning::Dropped deployment-link: it must be an http(s) URL without whitespace, |, < or >."
-          DEPLOYMENT_LINK=
+        if [ -n "$LINK" ] && ! [[ $LINK =~ $url_pattern ]]; then
+          echo "::warning::Dropped link: it must be an http(s) URL without whitespace, |, < or >."
+          LINK=
         fi
         # Escape Slack's control characters and turn off mention parsing so an input can't ping or fake a link.
         jq -n --arg application "$APPLICATION" --arg status "$status" --arg emoji "$emoji" \
           --arg version "$VERSION" --arg environment "$environment" \
-          --arg actor "$ACTOR" --arg deployment_link "$DEPLOYMENT_LINK" --arg run_url "$RUN_URL" '
+          --arg actor "$ACTOR" --arg link "$LINK" --arg run_url "$RUN_URL" '
           def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
           # A code block keeps the values aligned, two spaces past the longest label.
           ([
@@ -89,7 +89,7 @@ runs:
             | (map(.[0] | length) | max + 2) as $width
             | map(select(.[1] != "") | .[0] + " " * ($width - (.[0] | length)) + .[1])
             | join("\n") | esc) as $rows
-          | ([if $deployment_link == "" then empty else "<\($deployment_link)|Open \($application | esc)>" end,
+          | ([if $link == "" then empty else "<\($link)|Open \($application | esc)>" end,
               "<\($run_url)|View run>"] | join(" · ")) as $links
           | {
               text: ([if $environment == "" then empty else "[\($environment)]" end,
