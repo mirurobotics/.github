@@ -54,14 +54,15 @@ runs:
             exit 1
             ;;
         esac
+        # Unicode emoji, since shortcodes don't render in a code block.
         case " ${results[*]} " in
-          *" failure "*) status=Failed emoji=:x: ;;
-          *" cancelled "*) status=Cancelled emoji=:warning: ;;
+          *" failure "*) status=Failed emoji=❌ ;;
+          *" cancelled "*) status=Cancelled emoji=⚠️ ;;
           *)
             # A skipped result means the change didn't fully run.
-            status=Success emoji=:white_check_mark:
+            status=Success emoji=✅
             for result in "${results[@]}"; do
-              [ "$result" = success ] || status=Skipped emoji=:fast_forward:
+              [ "$result" = success ] || status=Skipped emoji=⏭️
             done
             ;;
         esac
@@ -72,18 +73,22 @@ runs:
           --arg version "$VERSION" --arg environment "$environment" \
           --arg actor "$ACTOR" --arg link "$LINK" '
           def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-          def row($label; $value): if $value == "" then empty else "*\($label):* \($value)" end;
-          {
-            text: ([if $environment == "" then empty else "[\($environment)]" end,
-                "\($status):", $application, $version]
-              | map(select(. != "")) | join(" ") | esc),
-            blocks: [{type: "section", text: {type: "mrkdwn", verbatim: true, text: ([
-              row("Application"; $application | esc),
-              row("Outcome"; "\($emoji) \($status)"),
-              row("Version"; $version | esc),
-              row("Environment"; $environment),
-              row("Triggered by"; $actor | esc),
-              row("Details"; "<\($link)|View>")
-            ] | join("\n"))}}]
-          }' \
+          # A code block keeps the values aligned.
+          def row($label; $value):
+            if $value == "" then empty else $label + " " * (14 - ($label | length)) + $value end;
+          ([
+            row("Application"; $application),
+            row("Outcome"; "\($emoji) \($status)"),
+            row("Version"; $version),
+            row("Environment"; $environment),
+            row("Triggered by"; $actor)
+          ] | join("\n") | esc) as $rows
+          | {
+              text: ([if $environment == "" then empty else "[\($environment)]" end,
+                  "\($status):", $application, $version]
+                | map(select(. != "")) | join(" ") | esc),
+              blocks: [{type: "section", text: {
+                type: "mrkdwn", verbatim: true, text: "```\n\($rows)\n```\n<\($link)|View details>"
+              }}]
+            }' \
           | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
