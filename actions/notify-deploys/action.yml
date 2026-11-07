@@ -54,6 +54,12 @@ runs:
             exit 1
             ;;
         esac
+        # Slack link syntax can't be escaped, so the URL must not contain its delimiters.
+        url_pattern='^https?://[^[:space:]|<>]+$'
+        if [ -n "$DEPLOYMENT_LINK" ] && ! [[ $DEPLOYMENT_LINK =~ $url_pattern ]]; then
+          echo "::error::The deployment-link input must be an http(s) URL without whitespace, |, < or >."
+          exit 1
+        fi
         # Unicode emoji, since shortcodes don't render in a code block.
         case " ${results[*]} " in
           *" failure "*) status=Failed emoji=❌ ;;
