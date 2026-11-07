@@ -89,7 +89,7 @@ runs:
             | (map(.[0] | length) | max + 2) as $width
             | map(select(.[1] != "") | .[0] + " " * ($width - (.[0] | length)) + .[1])
             | join("\n") | esc) as $rows
-          | ([if $deployment_link == "" then empty else "<\($deployment_link)|View deployment>" end,
+          | ([if $deployment_link == "" then empty else "<\($deployment_link)|Open \($application | esc)>" end,
               "<\($run_url)|View run>"] | join(" · ")) as $links
           | {
               text: ([if $environment == "" then empty else "[\($environment)]" end,
