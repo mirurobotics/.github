@@ -81,7 +81,6 @@ runs:
           def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
           # A code block keeps the values aligned, two spaces past the longest label.
           ([
-            ["Application", $application],
             ["Outcome", "\($emoji) \($status)"],
             ["Version", $version],
             ["Environment", $environment],
@@ -90,14 +89,14 @@ runs:
             | (map(.[0] | length) | max + 2) as $width
             | map(select(.[1] != "") | .[0] + " " * ($width - (.[0] | length)) + .[1])
             | join("\n") | esc) as $rows
-          | ([if $deployment_link == "" then empty else "<\($deployment_link)|View deployment>" end,
+          | ([if $deployment_link == "" then empty else "<\($deployment_link)|View details>" end,
               "<\($run_url)|View run>"] | join(" · ")) as $links
           | {
               text: ([if $environment == "" then empty else "[\($environment)]" end,
                   "\($status):", $application, $version]
                 | map(select(. != "")) | join(" ") | esc),
               blocks: [{type: "section", text: {
-                type: "mrkdwn", verbatim: true, text: "```\n\($rows)\n```\n\($links)"
+                type: "mrkdwn", verbatim: true, text: "*\($application | esc)*\n```\n\($rows)\n```\n\($links)"
               }}]
             }' \
           | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
