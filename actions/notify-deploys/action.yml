@@ -9,10 +9,12 @@ inputs:
     description: What changed, e.g. "[production] Deploy main · backend v0.11.40" or "Release the agent v0.14.0".
     required: true
   link:
-    description: Where to read more, such as the release notes or the workflow run.
-    required: true
+    description: Where to read more, such as the release notes. Defaults to the workflow run.
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
   results:
-    description: Space-separated job results. Any failure posts Failed, else any cancelled posts Cancelled, else Succeeded.
+    description: >-
+      Space-separated job results. Any failure posts Failed, else any cancelled posts Cancelled,
+      else all success posts Succeeded, else Skipped.
     required: false
     default: success
 
@@ -31,8 +33,17 @@ runs:
         case " $RESULTS " in
           *" failure "*) outcome=":x: Failed" ;;
           *" cancelled "*) outcome=":warning: Cancelled" ;;
-          *) outcome=":white_check_mark: Succeeded" ;;
+          *)
+            # A skipped or missing result means the change didn't fully run.
+            outcome=":white_check_mark: Succeeded"
+            read -ra results <<<"$RESULTS"
+            for result in "${results[@]:-}"; do
+              [ "$result" = success ] || outcome=":fast_forward: Skipped"
+            done
+            ;;
         esac
-        text="${outcome}: ${SUMMARY}, run by ${ACTOR} (<${LINK}|details>)"
-        jq -n --arg text "$text" '{text: $text}' \
+        # Escape Slack's control characters so a summary can't ping or fake a link.
+        jq -n --arg outcome "$outcome" --arg summary "$SUMMARY" --arg actor "$ACTOR" --arg link "$LINK" '
+          def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+          {text: "\($outcome): \($summary | esc), run by \($actor | esc) (<\($link)|details>)"}' \
           | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
