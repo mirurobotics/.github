@@ -1,0 +1,38 @@
+name: Notify #deploys
+description: Post a system change to the #deploys Slack channel (SOC 2, system changes communicated).
+
+inputs:
+  webhook-url:
+    description: Slack incoming webhook for #deploys (pass secrets.SLACK_DEPLOYS_WEBHOOK_URL).
+    required: true
+  summary:
+    description: What changed, e.g. "[production] Deploy main · backend v0.11.40" or "Release the agent v0.14.0".
+    required: true
+  link:
+    description: Where to read more, such as the release notes or the workflow run.
+    required: true
+  results:
+    description: Space-separated job results. Any failure posts Failed, else any cancelled posts Cancelled, else Succeeded.
+    required: false
+    default: success
+
+runs:
+  using: composite
+  steps:
+    - name: Post to Slack
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        SUMMARY: ${{ inputs.summary }}
+        LINK: ${{ inputs.link }}
+        RESULTS: ${{ inputs.results }}
+        ACTOR: ${{ github.triggering_actor }}
+      run: |
+        case " $RESULTS " in
+          *" failure "*) outcome=":x: Failed" ;;
+          *" cancelled "*) outcome=":warning: Cancelled" ;;
+          *) outcome=":white_check_mark: Succeeded" ;;
+        esac
+        text="${outcome}: ${SUMMARY}, run by ${ACTOR} (<${LINK}|details>)"
+        jq -n --arg text "$text" '{text: $text}' \
+          | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
