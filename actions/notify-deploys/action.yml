@@ -1,0 +1,53 @@
+name: Notify #deploys
+description: Post a system change to the #deploys Slack channel (SOC 2, system changes communicated).
+
+inputs:
+  webhook-url:
+    description: Slack incoming webhook for #deploys (pass secrets.SLACK_DEPLOYS_WEBHOOK_URL).
+    required: true
+  summary:
+    description: What changed, e.g. "[production] Deploy main · backend v0.11.40" or "Release the agent v0.14.0".
+    required: true
+  link:
+    description: Where to read more, such as the release notes. Defaults to the workflow run.
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  results:
+    description: >-
+      Whitespace-separated job results, e.g. join(needs.*.result, ' '). Any failure posts Failed,
+      else any cancelled posts Cancelled, else all success posts Succeeded, else Skipped.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post to Slack
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        SUMMARY: ${{ inputs.summary }}
+        LINK: ${{ inputs.link }}
+        RESULTS: ${{ inputs.results }}
+        ACTOR: ${{ github.triggering_actor }}
+      run: |
+        read -ra results <<<"$(tr -s '[:space:]' ' ' <<<"$RESULTS")"
+        # GitHub doesn't enforce required inputs on composite actions.
+        if [ "${#results[@]}" -eq 0 ]; then
+          echo "::error::The results input is required, e.g. join(needs.*.result, ' ')."
+          exit 1
+        fi
+        case " ${results[*]} " in
+          *" failure "*) outcome=":x: Failed" ;;
+          *" cancelled "*) outcome=":warning: Cancelled" ;;
+          *)
+            # A skipped result means the change didn't fully run.
+            outcome=":white_check_mark: Succeeded"
+            for result in "${results[@]}"; do
+              [ "$result" = success ] || outcome=":fast_forward: Skipped"
+            done
+            ;;
+        esac
+        # Escape Slack's control characters so a summary can't ping or fake a link.
+        jq -n --arg outcome "$outcome" --arg summary "$SUMMARY" --arg actor "$ACTOR" --arg link "$LINK" '
+          def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+          {text: "\($outcome): \($summary | esc), run by \($actor | esc) (<\($link)|details>)"}' \
+          | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
