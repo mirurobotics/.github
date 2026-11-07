@@ -5,16 +5,22 @@ inputs:
   webhook-url:
     description: Slack incoming webhook for #deploys (pass secrets.SLACK_DEPLOYS_WEBHOOK_URL).
     required: true
-  summary:
-    description: What changed, e.g. "[production] Deploy main · backend v0.11.40" or "Release the agent v0.14.0".
+  application:
+    description: What changed, e.g. "Backend", "CLI" or "Infrastructure".
     required: true
+  version:
+    description: The release tag or commit deployed. Leave empty when there is none.
+    default: ''
+  environment:
+    description: production, staging or uat. Leave empty for a release.
+    default: ''
   link:
-    description: Where to read more, such as the release notes. Defaults to the workflow run.
-    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    description: Where to read more on success, such as the release notes. Otherwise the run is linked.
+    default: ''
   results:
     description: >-
       Whitespace-separated job results, e.g. join(needs.*.result, ' '). Any failure posts Failed,
-      else any cancelled posts Cancelled, else all success posts Succeeded, else Skipped.
+      else any cancelled posts Cancelled, else all success posts Success, else Skipped.
     required: true
 
 runs:
@@ -24,15 +30,18 @@ runs:
       shell: bash
       env:
         WEBHOOK_URL: ${{ inputs.webhook-url }}
-        SUMMARY: ${{ inputs.summary }}
+        APPLICATION: ${{ inputs.application }}
+        VERSION: ${{ inputs.version }}
+        ENVIRONMENT: ${{ inputs.environment }}
         LINK: ${{ inputs.link }}
         RESULTS: ${{ inputs.results }}
         ACTOR: ${{ github.triggering_actor }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         read -ra results <<<"$(tr -s '[:space:]' ' ' <<<"$RESULTS")"
         # GitHub doesn't enforce required inputs on composite actions.
-        if [ "${#results[@]}" -eq 0 ]; then
-          echo "::error::The results input is required, e.g. join(needs.*.result, ' ')."
+        if [ -z "$APPLICATION" ] || [ "${#results[@]}" -eq 0 ]; then
+          echo "::error::The application and results inputs are required."
           exit 1
         fi
         case " ${results[*]} " in
@@ -40,14 +49,31 @@ runs:
           *" cancelled "*) outcome=":warning: Cancelled" ;;
           *)
             # A skipped result means the change didn't fully run.
-            outcome=":white_check_mark: Succeeded"
+            outcome=":white_check_mark: Success"
             for result in "${results[@]}"; do
               [ "$result" = success ] || outcome=":fast_forward: Skipped"
             done
             ;;
         esac
-        # Escape Slack's control characters so a summary can't ping or fake a link.
-        jq -n --arg outcome "$outcome" --arg summary "$SUMMARY" --arg actor "$ACTOR" --arg link "$LINK" '
+        # A failed change may not have published what the link points to.
+        [ "$outcome" = ":white_check_mark: Success" ] && [ -n "$LINK" ] || LINK=$RUN_URL
+        # Escape Slack's control characters so an input can't ping or fake a link.
+        jq -n --arg application "$APPLICATION" --arg outcome "$outcome" \
+          --arg version "$VERSION" --arg environment "$ENVIRONMENT" \
+          --arg actor "$ACTOR" --arg link "$LINK" '
           def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-          {text: "\($outcome): \($summary | esc), run by \($actor | esc) (<\($link)|details>)"}' \
-          | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
+          def row($label; $value): if $value == "" then empty else "*\($label):* \($value)" end;
+          ($environment | if . == "uat" then "UAT" else (.[:1] | ascii_upcase) + .[1:] end) as $env
+          | ($outcome | sub("^:[a-z_]+: "; "")) as $word
+          | {
+              text: "\($word): \($application | esc) \($version | esc)",
+              blocks: [{type: "section", text: {type: "mrkdwn", text: ([
+                row("Application"; $application | esc),
+                row("Outcome"; $outcome),
+                row("Version"; $version | esc),
+                row("Environment"; $env | esc),
+                row("Triggered by"; $actor | esc),
+                row("Details"; "<\($link)|View>")
+              ] | join("\n"))}}]
+            }' \
+          | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
