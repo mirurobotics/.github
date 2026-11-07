@@ -44,36 +44,46 @@ runs:
           echo "::error::The application and results inputs are required."
           exit 1
         fi
+        case "$ENVIRONMENT" in
+          production) environment=Production ;;
+          staging) environment=Staging ;;
+          uat) environment=UAT ;;
+          '') environment= ;;
+          *)
+            echo "::error::The environment input must be production, staging, uat or empty."
+            exit 1
+            ;;
+        esac
         case " ${results[*]} " in
-          *" failure "*) outcome=":x: Failed" ;;
-          *" cancelled "*) outcome=":warning: Cancelled" ;;
+          *" failure "*) status=Failed emoji=:x: ;;
+          *" cancelled "*) status=Cancelled emoji=:warning: ;;
           *)
             # A skipped result means the change didn't fully run.
-            outcome=":white_check_mark: Success"
+            status=Success emoji=:white_check_mark:
             for result in "${results[@]}"; do
-              [ "$result" = success ] || outcome=":fast_forward: Skipped"
+              [ "$result" = success ] || status=Skipped emoji=:fast_forward:
             done
             ;;
         esac
         # A failed change may not have published what the link points to.
-        [ "$outcome" = ":white_check_mark: Success" ] && [ -n "$LINK" ] || LINK=$RUN_URL
-        # Escape Slack's control characters so an input can't ping or fake a link.
-        jq -n --arg application "$APPLICATION" --arg outcome "$outcome" \
-          --arg version "$VERSION" --arg environment "$ENVIRONMENT" \
+        [ "$status" = Success ] && [ -n "$LINK" ] || LINK=$RUN_URL
+        # Escape Slack's control characters and turn off mention parsing so an input can't ping or fake a link.
+        jq -n --arg application "$APPLICATION" --arg status "$status" --arg emoji "$emoji" \
+          --arg version "$VERSION" --arg environment "$environment" \
           --arg actor "$ACTOR" --arg link "$LINK" '
           def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
           def row($label; $value): if $value == "" then empty else "*\($label):* \($value)" end;
-          ($environment | if . == "uat" then "UAT" else (.[:1] | ascii_upcase) + .[1:] end) as $env
-          | ($outcome | sub("^:[a-z_]+: "; "")) as $word
-          | {
-              text: "\($word): \($application | esc) \($version | esc)",
-              blocks: [{type: "section", text: {type: "mrkdwn", text: ([
-                row("Application"; $application | esc),
-                row("Outcome"; $outcome),
-                row("Version"; $version | esc),
-                row("Environment"; $env | esc),
-                row("Triggered by"; $actor | esc),
-                row("Details"; "<\($link)|View>")
-              ] | join("\n"))}}]
-            }' \
+          {
+            text: ([if $environment == "" then empty else "[\($environment)]" end,
+                "\($status):", $application, $version]
+              | map(select(. != "")) | join(" ") | esc),
+            blocks: [{type: "section", text: {type: "mrkdwn", verbatim: true, text: ([
+              row("Application"; $application | esc),
+              row("Outcome"; "\($emoji) \($status)"),
+              row("Version"; $version | esc),
+              row("Environment"; $environment),
+              row("Triggered by"; $actor | esc),
+              row("Details"; "<\($link)|View>")
+            ] | join("\n"))}}]
+          }' \
           | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL"
