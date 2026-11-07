@@ -95,6 +95,9 @@ runs:
               text: ([if $environment == "" then empty else "[\($environment)]" end,
                   "\($status):", $application, $version]
                 | map(select(. != "")) | join(" ") | esc),
+              # No link previews, so each post stays one compact block.
+              unfurl_links: false,
+              unfurl_media: false,
               blocks: [{type: "section", text: {
                 type: "mrkdwn", verbatim: true, text: "*\($application | esc)*\n```\n\($rows)\n```\n\($links)"
               }}]
