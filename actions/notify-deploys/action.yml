@@ -13,10 +13,9 @@ inputs:
     default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
   results:
     description: >-
-      Space-separated job results. Any failure posts Failed, else any cancelled posts Cancelled,
-      else all success posts Succeeded, else Skipped.
-    required: false
-    default: success
+      Whitespace-separated job results, e.g. join(needs.*.result, ' '). Any failure posts Failed,
+      else any cancelled posts Cancelled, else all success posts Succeeded, else Skipped.
+    required: true
 
 runs:
   using: composite
@@ -30,14 +29,19 @@ runs:
         RESULTS: ${{ inputs.results }}
         ACTOR: ${{ github.triggering_actor }}
       run: |
-        case " $RESULTS " in
+        read -ra results <<<"$(tr -s '[:space:]' ' ' <<<"$RESULTS")"
+        # GitHub doesn't enforce required inputs on composite actions.
+        if [ "${#results[@]}" -eq 0 ]; then
+          echo "::error::The results input is required, e.g. join(needs.*.result, ' ')."
+          exit 1
+        fi
+        case " ${results[*]} " in
           *" failure "*) outcome=":x: Failed" ;;
           *" cancelled "*) outcome=":warning: Cancelled" ;;
           *)
-            # A skipped or missing result means the change didn't fully run.
+            # A skipped result means the change didn't fully run.
             outcome=":white_check_mark: Succeeded"
-            read -ra results <<<"$RESULTS"
-            for result in "${results[@]:-}"; do
+            for result in "${results[@]}"; do
               [ "$result" = success ] || outcome=":fast_forward: Skipped"
             done
             ;;
