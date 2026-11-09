@@ -1,0 +1,120 @@
+# Reusable CodeQL scan for Miru repos.
+#
+# Each repo keeps its own triggers in a short caller and pins this workflow
+# to a commit, so a change here reaches a repo only through a reviewed PR
+# that bumps the SHA.
+#
+#   on:
+#     schedule:
+#       - cron: "31 7 * * *"
+#     workflow_dispatch:
+#   permissions:
+#     actions: read
+#     contents: read
+#     security-events: write
+#   jobs:
+#     codeql:
+#       uses: mirurobotics/.github/.github/workflows/codeql.yml@<sha>
+#       with:
+#         languages: javascript, actions
+#         config-file: .github/codeql/codeql-config.yml
+
+# yamllint disable rule:line-length
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: CodeQL languages, comma-separated (e.g. "go, actions")
+        type: string
+        required: true
+      runs-on:
+        description: Runner label
+        type: string
+        default: blacksmith-2vcpu-ubuntu-2404
+      config-file:
+        description: CodeQL config file in the caller repo
+        type: string
+        default: ""
+      source-root:
+        description: Directory to scan, relative to the repo root
+        type: string
+        default: ""
+      submodules:
+        description: Check out public submodules recursively
+        type: boolean
+        default: false
+      go:
+        description: Set up Go from the caller's go.mod
+        type: boolean
+        default: false
+      go-private-modules:
+        description: Let Go fetch private mirurobotics modules with SUBMODULES_PAT
+        type: boolean
+        default: false
+    secrets:
+      SUBMODULES_PAT:
+        description: Token that can read private mirurobotics Go modules
+        required: false
+
+permissions: {}
+
+jobs:
+  changes:
+    name: Check for new commits
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      scan: ${{ steps.check.outputs.scan }}
+    steps:
+      # The nightly run skips the scan when main hasn't moved since the last
+      # successful run, so quiet repos don't rescan the same commit.
+      - name: Check for commits since the last scan
+        id: check
+        uses: mirurobotics/.github/actions/codeql-gate@d2aec010e6ce5c9dd65fb16e6d06a0f61e437734 # main
+
+  codeql:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.scan != 'false' }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: ${{ inputs.submodules && 'recursive' || 'false' }}
+
+      - name: Setup Go
+        if: ${{ inputs.go }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ./go.mod
+
+      - name: Configure Git for private Go modules
+        if: ${{ inputs.go-private-modules }}
+        env:
+          SUBMODULES_PAT: ${{ secrets.SUBMODULES_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${SUBMODULES_PAT}@github.com/".insteadOf "https://github.com/"
+          go env -w GOPRIVATE="github.com/mirurobotics/*"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ inputs.languages }}
+          config-file: ${{ inputs.config-file }}
+          source-root: ${{ inputs.source-root }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
