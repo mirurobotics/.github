@@ -1,34 +1,33 @@
-# Reusable automated AI code review, required before merge.
+# Reusable AI code review, required before merge.
 #
-# Posts the `ai-review` commit status on the PR head commit. Callers mark
-# that status as a required check so a PR cannot merge until Claude has
-# reviewed its latest commit and found no blocking issues.
+# How it works
 #
-# Draft PRs get a design review instead, on every push and when a ready
-# PR goes back to draft. One Claude session asks the design-review
-# skill's ten questions of the whole PR and posts only new findings as
-# advisory "Design (...)" comments, with its own summary. It sets no
-# status, since a draft can't merge. Marking the PR ready starts the
-# review below, where an open high-severity design thread blocks until
-# it is fixed or answered with a reason.
+# - Drafts get an advisory design review on every push. One Claude
+#   session asks the design-review skill's questions and posts new
+#   findings as "Design (...)" comments. It sets no status.
+# - Ready PRs get the required review, which sets the `ai-review`
+#   commit status. Callers make that status a required check.
+#   1. Reviewer jobs run in parallel and post nothing. Claude runs one
+#      reviewer for a small change or three (correctness, safety,
+#      quality) for a larger one, plus a design reviewer. With
+#      openai-model set, an OpenAI model also reviews from every angle.
+#   2. A final Claude session checks every finding against the code,
+#      posts the ones that hold up and sets the verdict. Open
+#      high-severity design threads block.
+#   If the OpenAI job fails, Claude decides without it. If Claude's
+#   reviewers fail, the review fails.
+# - Each PR has one summary comment, edited every round. Later rounds
+#   post nits only on what changed since the head it records. With
+#   OpenAI, it also counts each model's findings, to judge the cost.
+# - Generated files count like any other. Files under plans/ are read
+#   for intent only.
 #
-# Each push, one Claude session runs read-only reviewer sub-agents: one
-# for a small change, three in parallel (correctness, safety, quality)
-# for a larger one, and a design reviewer whose high-severity findings
-# block. It then checks their findings
-# against the code, posts the ones that hold up and sets the verdict.
-# Each PR gets one summary comment, edited every round. It records the
-# head it reviewed, so later rounds review and post nits only on what
-# changed since. Generated files are reviewed and counted like any
-# other file. Files under plans/ are read for intent only: they get no
-# comments and don't count toward the PR's size.
+# Usage
 #
-# Call it from a `pull_request_target` workflow so the caller runs from
-# the base branch and a PR cannot edit or delete its own review. The PR
-# head is checked out into a subdirectory and only read, never executed.
-#
-# This lives in the public .github repo so public repos can call it too;
-# GitHub only lets private repos call workflows from a private repo.
+# Call it from a `pull_request_target` workflow, so a PR can't edit its
+# own review. The PR head is only read, never executed. Pin a commit
+# SHA, so changes here reach a repo only through a reviewed bump; the
+# prompts and scripts in ai-review/ are read at that commit.
 #
 #   on:
 #     pull_request_target:
@@ -45,27 +44,28 @@
 #       uses: mirurobotics/.github/.github/workflows/ai-review.yml@<commit-sha>
 #       with:
 #         effort: high  # optional; also `model` and `runs-on`
+#         openai-model: gpt-6.1-sol  # optional; adds the OpenAI reviewer, also `openai-effort`
 #       secrets:
 #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 #         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 #         AGENTS_READ_TOKEN: ${{ secrets.AGENTS_READ_TOKEN }}  # private repos
+#         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # with openai-model
 #
-# Pin to a commit SHA so a change here reaches a repo only through a
-# reviewed PR that bumps it. The prompts and scripts in ai-review/ are read at
-# that same commit.
+# Secrets, each set as both an Actions and a Dependabot secret
 #
-# Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
-# as both an Actions and a Dependabot secret. The caller repo must allow
-# `anthropics/claude-code-action@*`.
+# - ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`).
+#   The caller repo must allow `anthropics/claude-code-action@*`.
+# - AGENTS_READ_TOKEN, private repos only: Contents: read on
+#   mirurobotics/agents, for the miru-internal rules and skills. Without
+#   it the review fails. Add it before bumping the pin: once a bump
+#   without it merges, the PR adding it fails too, since the base
+#   branch's caller runs. Public repos skip the rules and skills,
+#   since comments could quote them.
+# - OPENAI_API_KEY, with openai-model. Codex runs only for pushers with
+#   write access or allowed bots, so a fork can't spend the key.
 #
-# Private repos must pass AGENTS_READ_TOKEN (Contents: read on
-# mirurobotics/agents), set as both an Actions and a Dependabot
-# organization secret. Reviewers read the miru-internal rules and skills
-# from mirurobotics/agents at AGENTS_REF; without the token the review
-# fails. Add the `AGENTS_READ_TOKEN:` line before bumping the pin:
-# pull_request_target runs the base branch's caller, so once a bump
-# without it merges, the PR that adds it fails too. Public repos skip
-# the rules and skills, since comments could quote them.
+# This lives in the public .github repo so public repos can call it;
+# GitHub only lets private repos call workflows from a private repo.
 
 # yamllint disable rule:line-length
 name: AI Review
@@ -85,6 +85,14 @@ on:
         description: Claude effort level (low, medium, high, xhigh, max)
         type: string
         default: high
+      openai-model:
+        description: OpenAI model that also reviews ready PRs. Empty skips it.
+        type: string
+        default: ""
+      openai-effort:
+        description: OpenAI reasoning effort (minimal, low, medium, high)
+        type: string
+        default: medium
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic API key. Set this or CLAUDE_CODE_OAUTH_TOKEN.
@@ -95,6 +103,9 @@ on:
       AGENTS_READ_TOKEN:
         description: Read access to mirurobotics/agents, for the miru-internal rules and skills. Required in private repos.
         required: false
+      OPENAI_API_KEY:
+        description: OpenAI API key. Required with openai-model.
+        required: false
 
 env:
   STATUS_CONTEXT: ai-review
@@ -102,29 +113,36 @@ env:
   AGENTS_REF: 823712338d20adff57b39ab69ac35f09a47b2e37
 
 jobs:
-  # Every push, plus switches between draft and ready. Callers must
-  # subscribe to only these: any other event cancels a running review.
-  review:
-    if: contains(fromJSON('["opened","synchronize","reopened","ready_for_review","converted_to_draft"]'), github.event.action)
+  # Ready PRs: Claude's reviewer sub-agents. They reply with findings
+  # and post nothing, so this job's token can only read.
+  reviewers:
+    if: &ready-pr ${{ !github.event.pull_request.draft && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) }}
     timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      findings: ${{ steps.claude.outputs.structured_output }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       SHA: ${{ github.event.pull_request.head.sha }}
-      # design on drafts, the required review once ready.
-      PHASE: ${{ github.event.pull_request.draft && 'design' || 'review' }}
+      PHASE: review
+      SESSION: reviewers
       AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
     steps:
       # Base branch at the workspace root so Claude's config (CLAUDE.md,
       # .claude/) comes from trusted code; PR head in a subdirectory.
-      - name: Checkout base
+      - &checkout-base
+        name: Checkout base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Full history, so collect.js can find the merge base and the last
       # reviewed head with git.
-      - name: Checkout PR head
+      - &checkout-pr-head
+        name: Checkout PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -135,7 +153,8 @@ jobs:
       # This workflow's prompts and scripts, at the commit the caller
       # pinned. The github context names the caller's workflow; job names
       # this one.
-      - name: Checkout AI review prompts and scripts
+      - &checkout-ai-review
+        name: Checkout AI review prompts and scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
@@ -144,16 +163,10 @@ jobs:
           sparse-checkout: ai-review
           persist-credentials: false
 
-      - name: Set status pending
-        if: env.PHASE == 'review'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            await require(`${process.env.AI_REVIEW_LIB}/record.js`).pending({ github, context })
-
       # A missing or expired token fails the review, rather than quietly
       # reviewing without the skills.
-      - name: Require AGENTS_READ_TOKEN
+      - &require-agents-token
+        name: Require AGENTS_READ_TOKEN
         if: github.event.repository.private
         env:
           TOKEN: ${{ secrets.AGENTS_READ_TOKEN }}
@@ -163,7 +176,8 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout miru-internal rules and skills
+      - &checkout-miru-internal
+        name: Checkout miru-internal rules and skills
         if: github.event.repository.private
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,10 +188,11 @@ jobs:
           persist-credentials: false
 
       # The description, the diff, earlier review rounds and the summary
-      # comment to edit (ai-review/lib/collect.js), then the phase's prompt,
-      # Claude arguments and reviewers (ai-review/lib/plan.js). Fetched here
-      # so Claude never gets a token that can post statuses.
-      - name: Prepare review
+      # comment to edit (ai-review/lib/collect.js), then the session's
+      # prompt, Claude arguments and reviewers (ai-review/lib/plan.js).
+      # Fetched here so Claude never gets a token that can post statuses.
+      - &prepare
+        name: Prepare review
         id: prepare
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -185,15 +200,16 @@ jobs:
             const { files, delta } = await require(`${process.env.AI_REVIEW_LIB}/collect.js`).collect({ github, context, core, exec })
             require(`${process.env.AI_REVIEW_LIB}/plan.js`).plan({ core, files, delta })
 
-      # Each phase's tools, turns and output schema are in plan.js. The
-      # timeout stays under the job's so Record can still set an error
-      # status if the session hangs.
-      - name: Claude
+      # Each session's tools, turns and output schema are in plan.js. The
+      # timeout stays under the job's, so a hung session ends before the
+      # job does and a later Record step still runs.
+      - &claude
+        name: Claude
         id: claude
         timeout-minutes: 80
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          # Keeps reviewers in the foreground, so the session waits for them.
+          # Any sub-agents run in the foreground, so the session waits for them.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -212,6 +228,106 @@ jobs:
             --effort ${{ inputs.effort }}
             --add-dir pr-head
             ${{ steps.prepare.outputs.claude_args }}
+
+  # Ready PRs, alongside the Claude reviewers: an OpenAI model reviews
+  # from every angle they cover, with the same inputs and reviewer
+  # instructions. Its own job, because codex-action drops sudo for the
+  # rest of the job it runs in. The timeout keeps it from holding up the
+  # review for long.
+  openai:
+    if: inputs.openai-model != '' && !github.event.pull_request.draft && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action)
+    timeout-minutes: 10
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      findings: ${{ steps.codex.outputs.final-message }}
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      PHASE: review
+      AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
+    steps:
+      - *checkout-base
+      - *checkout-pr-head
+      - *checkout-ai-review
+      - *require-agents-token
+      - *checkout-miru-internal
+      - *prepare
+
+      # Read-only and no network for the commands Codex runs. The key
+      # stays in the action's proxy, out of Codex's reach.
+      - name: Codex
+        id: codex
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ inputs.openai-model }}
+          effort: ${{ inputs.openai-effort }}
+          permission-profile: ":read-only"
+          allow-bot-users: "dependabot,stlc-sealback-bot"
+          prompt: |
+            You review one pull request. First read ./ai-review-context/reviewer.md and follow it.
+            Your angle is every file in ./ai-review-context/angles/: read each one and review from all of their lenses.
+
+  # Ready PRs: marks the head pending at once, so an earlier green
+  # status on the same head can't merge while the reviewers run. Its own
+  # job, so the read-only reviewer jobs never get statuses: write.
+  pending:
+    if: *ready-pr
+    timeout-minutes: 10
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      statuses: write
+    env:
+      SHA: ${{ github.event.pull_request.head.sha }}
+      AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
+    steps:
+      - *checkout-ai-review
+      - name: Set status pending
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await require(`${process.env.AI_REVIEW_LIB}/record.js`).pending({ github, context })
+
+  # Every push, plus switches between draft and ready. Callers must
+  # subscribe to only these: any other event cancels a running review.
+  # Drafts get the design review; ready PRs wait for the reviewer jobs,
+  # then Claude checks their findings and records the verdict.
+  review:
+    needs: [pending, reviewers, openai]
+    if: ${{ !cancelled() && contains(fromJSON('["opened","synchronize","reopened","ready_for_review","converted_to_draft"]'), github.event.action) }}
+    timeout-minutes: 90
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      # design on drafts, the required review once ready.
+      PHASE: ${{ github.event.pull_request.draft && 'design' || 'review' }}
+      AI_REVIEW_LIB: ${{ github.workspace }}/ai-review-src/ai-review/lib
+    steps:
+      - *checkout-base
+      - *checkout-pr-head
+      - *checkout-ai-review
+      - *require-agents-token
+      - *checkout-miru-internal
+      - *prepare
+
+      # Fails, and so skips Claude and sets an error status, when a Claude
+      # reviewer's findings are missing (ai-review/lib/plan.js).
+      - name: Add reviewer findings
+        if: env.PHASE == 'review'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CLAUDE_FINDINGS: ${{ needs.reviewers.outputs.findings }}
+          OPENAI_FINDINGS: ${{ needs.openai.outputs.findings }}
+        with:
+          script: |
+            require(`${process.env.AI_REVIEW_LIB}/plan.js`).addFindings({})
+
+      - *claude
 
       # Edits the phase's summary comment and, for the required review,
       # sets the status (ai-review/lib/record.js).

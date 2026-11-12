@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { plan, reviewers, claudeArgs, PHASES } = require('./plan.js')
+const { plan, reviewers, claudeArgs, addFindings, angleNames, SESSIONS } = require('./plan.js')
 
 const design = ['design']
 
@@ -27,31 +27,36 @@ test('reviewers: more than 100 reviewed lines get three, plus design', () => {
   assert.deepEqual(reviewers({ total: 80, lines: 150, tests: false }), { correctness: ['correctness', 'contracts'], safety: ['security'], design })
 })
 
-test('claudeArgs quotes each phase\'s JSON safely', () => {
-  for (const phase of Object.keys(PHASES)) {
-    for (const value of [PHASES[phase].agents, PHASES[phase].schema].filter(Boolean)) {
-      assert.ok(!JSON.stringify(value).includes("'"), `${phase} JSON must not contain a single quote`)
+test('claudeArgs quotes each session\'s JSON safely', () => {
+  for (const session of Object.keys(SESSIONS)) {
+    for (const value of [SESSIONS[session].agents, SESSIONS[session].schema].filter(Boolean)) {
+      assert.ok(!JSON.stringify(value).includes("'"), `${session} JSON must not contain a single quote`)
     }
   }
-  assert.match(claudeArgs('review'), /^--max-turns 150\n--agents '\{"reviewer":/)
-  assert.doesNotMatch(claudeArgs('design'), /--agents/)
-  assert.match(claudeArgs('design'), /--disallowedTools "[^"]*,Agent,Task"/)
+  assert.match(claudeArgs('reviewers'), /^--max-turns 50\n--agents '\{"reviewer":/)
+  assert.doesNotMatch(claudeArgs('reviewers'), /inline_comment/)
+  for (const session of ['review', 'design']) {
+    assert.doesNotMatch(claudeArgs(session), /--agents/)
+    assert.match(claudeArgs(session), /--disallowedTools "[^"]*,Agent,Task"/)
+  }
 })
 
-function runPlan (phase, files, delta = null) {
+function runPlan (phase, files, delta = null, session = '') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-'))
   const outputs = {}
-  plan({ core: { setOutput: (k, v) => { outputs[k] = v }, info: () => {} }, files, delta, env: { PHASE: phase, GITHUB_WORKSPACE: root } })
+  plan({ core: { setOutput: (k, v) => { outputs[k] = v }, info: () => {} }, files, delta, env: { PHASE: phase, SESSION: session, GITHUB_WORKSPACE: root } })
   const dir = path.join(root, 'ai-review-context')
   const read = (p) => (fs.existsSync(path.join(dir, p)) ? fs.readFileSync(path.join(dir, p), 'utf8') : null)
-  return { outputs, read }
+  return { root, outputs, read }
 }
+
+const prompt = (name) => fs.readFileSync(path.join(__dirname, '..', 'prompts', name), 'utf8').replace(/\n$/, '')
 
 const file = (filename, lines, over = {}) => ({ filename, additions: lines, deletions: 0, ...over })
 
 test('plan writes the reviewers\' instructions for the required review', () => {
   const { outputs, read } = runPlan('review', [file('src/a.go', 60), file('src/a_test.go', 10)])
-  assert.equal(outputs.prompt, fs.readFileSync(path.join(__dirname, '..', 'prompts', 'review.md'), 'utf8').replace(/\n$/, ''))
+  assert.equal(outputs.prompt, prompt('review.md'))
   assert.equal(outputs.claude_args, claudeArgs('review'))
   assert.equal(read('angles/review.md'), [
     'Your angle covers these lenses. Read each file and review from all of them:',
@@ -80,5 +85,54 @@ test('plan writes no reviewers for a design review', () => {
   assert.equal(outputs.claude_args, claudeArgs('design'))
   assert.equal(read('angles/review.md'), null)
   assert.ok(read('lenses/design.md'))
-  assert.equal(outputs.prompt, fs.readFileSync(path.join(__dirname, '..', 'prompts', 'design.md'), 'utf8').replace(/\n$/, ''))
+  assert.equal(outputs.prompt, prompt('design.md'))
+})
+
+test('SESSION picks the reviewers\' session and keeps the review\'s reviewers', () => {
+  const { outputs, read } = runPlan('review', [file('src/a.go', 60)], null, 'reviewers')
+  assert.equal(outputs.prompt, prompt('reviewers.md'))
+  assert.equal(outputs.claude_args, claudeArgs('reviewers'))
+  assert.ok(read('angles/review.md'))
+})
+
+test('angleNames strips paths and extensions, then sorts and dedupes', () => {
+  assert.deepEqual(angleNames(['quality.md', './ai-review-context/angles/correctness.md', 'safety', 'quality']), ['correctness', 'quality', 'safety'])
+})
+
+// Plans a 150-line review (angles correctness, safety, quality and
+// design), then adds the given findings.
+function runAddFindings (claude, openai = '') {
+  const { root, read } = runPlan('review', [file('src/a.go', 150)])
+  const env = { GITHUB_WORKSPACE: root, CLAUDE_FINDINGS: typeof claude === 'string' ? claude : JSON.stringify(claude), OPENAI_FINDINGS: openai }
+  let error = null
+  try {
+    addFindings({ env })
+  } catch (err) {
+    error = err
+  }
+  return { error, read }
+}
+
+const review = (angle) => ({ angle, findings: [{ file: 'src/a.go', line: 1, severity: 'nit', description: angle }] })
+const allReviews = { reviews: ['quality', 'correctness', 'safety', 'design'].map(review) }
+
+test('addFindings writes both reviewers\' findings', () => {
+  const { error, read } = runAddFindings(allReviews, '[{"file": "src/a.go"}]')
+  assert.equal(error, null)
+  assert.deepEqual(JSON.parse(read('findings/claude.json')), allReviews.reviews)
+  assert.equal(read('findings/openai.json'), '[{"file": "src/a.go"}]\n')
+})
+
+test('addFindings needs no OpenAI findings', () => {
+  const { error, read } = runAddFindings(allReviews)
+  assert.equal(error, null)
+  assert.equal(read('findings/openai.json'), null)
+})
+
+test('addFindings fails when a Claude reviewer\'s findings are missing', () => {
+  for (const claude of ['', 'not json', 'null', {}, { reviews: [] }, { reviews: allReviews.reviews.slice(1) }, { reviews: [...allReviews.reviews, review('extra')] }]) {
+    const { error, read } = runAddFindings(claude)
+    assert.match(error?.message ?? '', /don't match the angles run \(correctness,design,quality,safety\)/, JSON.stringify(claude))
+    assert.equal(read('findings/claude.json'), null)
+  }
 })
