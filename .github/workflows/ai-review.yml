@@ -17,8 +17,8 @@
 #   If the OpenAI job fails, Claude decides without it. If Claude's
 #   reviewers fail, the review fails.
 # - Each PR has one summary comment, edited every round. Later rounds
-#   review only what changed since the head it records. With OpenAI,
-#   it also counts each model's findings, to judge the cost.
+#   post nits only on what changed since the head it records. With
+#   OpenAI, it also counts each model's findings, to judge the cost.
 # - Generated files count like any other. Files under plans/ are read
 #   for intent only.
 #
@@ -116,7 +116,7 @@ jobs:
   # Ready PRs: Claude's reviewer sub-agents. They reply with findings
   # and post nothing, so this job's token can only read.
   reviewers:
-    if: ${{ !github.event.pull_request.draft && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) }}
+    if: &ready-pr ${{ !github.event.pull_request.draft && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) }}
     timeout-minutes: 90
     runs-on: ${{ inputs.runs-on }}
     permissions:
@@ -273,9 +273,9 @@ jobs:
 
   # Ready PRs: marks the head pending at once, so an earlier green
   # status on the same head can't merge while the reviewers run. Its own
-  # job, so no Claude session gets a token that can post statuses.
+  # job, so the read-only reviewer jobs never get statuses: write.
   pending:
-    if: ${{ !github.event.pull_request.draft && contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) }}
+    if: *ready-pr
     timeout-minutes: 10
     runs-on: ${{ inputs.runs-on }}
     permissions:
