@@ -1,18 +1,24 @@
 # Required AI review of every non-draft PR, and an advisory design review
 # of drafts. Posts the `ai-review` status checked by branch protection.
-# See ai-review.yml for details.
+# See the reusable workflow for details.
 #
-# pull_request_target runs this file, and the local reusable workflow it
-# calls, from the base branch, so a PR cannot edit or delete its own review.
+# pull_request_target runs this file from the base branch, so a PR cannot
+# edit or delete its own review. The merge queue runs the merge group
+# commit's copy, built from main and the reviewed PRs queued so far, with
+# the repo's secrets.
+#
+# The reusable workflow is pinned to a commit, so a change to it only takes
+# effect here through a reviewed PR that bumps the SHA.
 
 name: AI Review
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 permissions:
@@ -22,7 +28,9 @@ permissions:
 
 jobs:
   ai-review:
-    uses: ./.github/workflows/ai-review.yml
+    uses: mirurobotics/workflows/.github/workflows/ai-review.yml@aba8fd51d888a53d082843f81d4f788e7d1caae0
+    with:
+      runs-on: ubuntu-latest # standard GitHub-hosted runners are free in public repos
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
